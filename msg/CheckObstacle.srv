@@ -1,0 +1,11 @@
+# 障碍物检测服务定义
+# 请求参数
+# 无参数，直接使用当前激光雷达数据
+
+---
+# 响应参数
+bool success           # 是否成功
+string message         # 返回消息
+float32 safe_direction # 安全方向 (度，0为正前方，正数为左转，负数为右转)
+float32 min_distance   # 最小障碍物距离 (米)
+bool[] safe_sectors    # 安全扇区 (8个扇区，每个45度)

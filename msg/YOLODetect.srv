@@ -1,0 +1,11 @@
+# YOLO检测服务定义
+# 请求参数
+float32 threshold  # 置信度阈值 (0.0-1.0)
+
+---
+# 响应参数
+bool success       # 是否成功
+string message     # 返回消息
+string[] objects   # 检测到的物体列表
+float32[] distances  # 物体距离 (米)
+string[] positions   # 物体位置描述 (如"左下方", "右上方")

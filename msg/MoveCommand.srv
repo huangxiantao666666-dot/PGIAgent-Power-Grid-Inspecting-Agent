@@ -1,0 +1,10 @@
+# 移动命令服务定义
+# 请求参数
+float32 velocity  # 移动速度 (m/s)，正数为前进，负数为后退
+float32 angle     # 转向角度 (度)，0为直行，正数为左转，负数为右转
+float32 seconds   # 移动时间 (秒)
+
+---
+# 响应参数
+bool success      # 是否成功
+string message    # 返回消息

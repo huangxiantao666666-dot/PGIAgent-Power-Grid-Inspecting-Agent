@@ -1,0 +1,202 @@
+# ROS2参数配置
+
+# 感知节点参数
+perception_node:
+  ros__parameters:
+    # 模型参数
+    model_path: "yolo11n.engine"  # 模型路径
+    imgsz: 320  # 输入图像尺寸
+    conf_threshold: 0.5  # 置信度阈值
+    
+    # 话题配置
+    rgb_topic: "/depth_cam/rgb/image_raw"
+    depth_topic: "/depth_cam/depth/image_raw"
+    target_info_topic: "/perception/target_info"
+    
+    # 性能参数
+    use_gpu: true
+    gpu_id: 0
+    half_precision: true
+
+# PID控制节点参数
+pid_control_node:
+  ros__parameters:
+    # 目标距离参数
+    target_dist: 1200.0  # 目标距离 (mm)
+    dist_deadzone: 50.0  # 距离死区 (mm)
+    
+    # PID参数 - 线速度控制
+    kp_linear: 0.0008
+    ki_linear: 0.0
+    kd_linear: 0.0001
+    
+    # PID参数 - 角速度控制
+    kp_angular: 0.002
+    ki_angular: 0.0
+    kd_angular: 0.0002
+    
+    # 速度限制
+    max_linear_vel: 0.4  # 最大线速度 (m/s)
+    max_angular_vel: 0.8  # 最大角速度 (rad/s)
+    
+    # 话题配置
+    target_info_topic: "/perception/target_info"
+    cmd_vel_topic: "/controller/cmd_vel"
+    
+    # 安全参数
+    max_safe_distance: 4000.0  # 最大安全距离 (mm)
+    watchdog_timeout: 0.5  # 看门狗超时时间 (s)
+
+# 移动工具节点参数
+move_node:
+  ros__parameters:
+    # 默认参数
+    default_velocity: 0.2  # 默认速度 (m/s)
+    default_seconds: 2.0  # 默认时间 (s)
+    angular_scaling: 0.5  # 角度缩放因子
+    
+    # 话题配置
+    cmd_vel_topic: "/cmd_vel"
+    service_name: "/pgi_agent/move"
+    
+    # 安全参数
+    max_velocity: 0.5  # 最大速度 (m/s)
+    emergency_stop_distance: 0.2  # 紧急停止距离 (m)
+
+# YOLO检测节点参数
+yolo_detect_node:
+  ros__parameters:
+    # 模型参数
+    model_path: "yolo11n.pt"
+    conf_threshold: 0.8  # 置信度阈值
+    imgsz: 320
+    
+    # 话题配置
+    rgb_topic: "/depth_cam/rgb/image_raw"
+    depth_topic: "/depth_cam/depth/image_raw"
+    service_name: "/pgi_agent/yolo_detect"
+    
+    # 检测参数
+    classes: [0]  # 默认只检测人
+    use_depth: true  # 是否使用深度信息
+    max_detections: 10  # 最大检测数量
+
+# VLM检测节点参数
+vlm_detect_node:
+  ros__parameters:
+    # API配置
+    api_key: "${QWEN_VL_API_KEY}"
+    model: "qwen-vl-max"
+    
+    # 话题配置
+    rgb_topic: "/depth_cam/rgb/image_raw"
+    service_name: "/pgi_agent/vlm_detect"
+    
+    # 请求参数
+    max_tokens: 1000
+    temperature: 0.1
+    timeout: 30  # 请求超时时间 (s)
+
+# 追踪节点参数
+track_node:
+  ros__parameters:
+    # 追踪参数
+    default_target: "person"
+    tracking_distance: 1.2  # 追踪距离 (m)
+    tracking_timeout: 30  # 追踪超时时间 (s)
+    
+    # 话题配置
+    target_info_topic: "/perception/target_info"
+    cmd_vel_topic: "/cmd_vel"
+    service_name: "/pgi_agent/track"
+    
+    # PID参数
+    kp_distance: 0.5
+    ki_distance: 0.0
+    kd_distance: 0.1
+    kp_angle: 0.8
+    ki_angle: 0.0
+    kd_angle: 0.2
+
+# 障碍物检测节点参数
+obstacle_check_node:
+  ros__parameters:
+    # 激光雷达参数
+    scan_topic: "/scan"
+    service_name: "/pgi_agent/check_obstacle"
+    
+    # 检测参数
+    safe_angle_range: 60  # 安全角度范围 (度)
+    min_safe_distance: 0.5  # 最小安全距离 (m)
+    angle_resolution: 1  # 角度分辨率 (度)
+    
+    # 区域划分
+    front_angle: 30  # 前方角度范围
+    left_angle: 60  # 左侧角度范围
+    right_angle: 60  # 右侧角度范围
+
+# OCR节点参数
+ocr_node:
+  ros__parameters:
+    # OCR配置
+    languages: ["en", "ch_sim"]
+    use_easyocr: true
+    
+    # 话题配置
+    rgb_topic: "/depth_cam/rgb/image_raw"
+    service_name: "/pgi_agent/ocr"
+    
+    # 预处理参数
+    resize_factor: 2.0
+    denoise: true
+    adaptive_threshold: true
+    
+    # 性能参数
+    gpu: true
+    batch_size: 1
+
+# 智能体桥接节点参数
+agent_bridge_node:
+  ros__parameters:
+    # 服务配置
+    services:
+      - "/pgi_agent/move"
+      - "/pgi_agent/yolo_detect"
+      - "/pgi_agent/vlm_detect"
+      - "/pgi_agent/track"
+      - "/pgi_agent/check_obstacle"
+      - "/pgi_agent/ocr"
+    
+    # 话题配置
+    status_topic: "/pgi_agent/status"
+    command_topic: "/pgi_agent/command"
+    
+    # 性能参数
+    max_concurrent_requests: 3
+    request_timeout: 60  # 请求超时时间 (s)
+    
+    # 日志配置
+    log_level: "INFO"
+    log_file: "/tmp/pgi_agent_bridge.log"
+
+# 通用参数
+global:
+  ros__parameters:
+    # 帧率配置
+    camera_fps: 30
+    lidar_hz: 10
+    control_hz: 20
+    
+    # 坐标变换
+    base_frame: "base_link"
+    camera_frame: "depth_cam_link"
+    lidar_frame: "laser"
+    
+    # 网络配置
+    use_sim_time: false
+    qos_depth: 10
+    
+    # 调试配置
+    enable_visualization: true
+    save_debug_images: false
+    debug_image_path: "/tmp/pgi_agent_debug"

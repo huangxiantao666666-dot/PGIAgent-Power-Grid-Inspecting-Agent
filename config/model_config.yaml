@@ -1,0 +1,164 @@
+# 模型配置
+
+# YOLOv11配置
+yolo:
+  # 模型选择
+  model_name: "yolo11n"  # yolo11n, yolo11s, yolo11m, yolo11l, yolo11x
+  model_format: "engine"  # pt, engine (TensorRT), onnx
+  
+  # 模型路径
+  pt_path: "models/yolo11n.pt"
+  engine_path: "models/yolo11n.engine"
+  onnx_path: "models/yolo11n.onnx"
+  
+  # 推理配置
+  imgsz: 320  # 输入图像尺寸
+  conf_threshold: 0.5  # 置信度阈值
+  iou_threshold: 0.45  # IOU阈值
+  half: true  # 使用半精度推理
+  
+  # 类别配置
+  classes:  # 关注的类别ID
+    - 0   # person
+    - 39  # bottle
+    - 41  # cup
+    - 56  # chair
+    - 67  # cell phone
+    - 73  # laptop
+  
+  # 自定义类别（电网巡检相关）
+  custom_classes:
+    electric_box:  # 电箱
+      color: [0, 255, 0]  # 绿色
+      priority: 1
+    transformer:  # 变压器
+      color: [255, 0, 0]  # 红色
+      priority: 1
+    cable:  # 电缆
+      color: [0, 0, 255]  # 蓝色
+      priority: 2
+    warning_sign:  # 警告标志
+      color: [255, 255, 0]  # 黄色
+      priority: 3
+
+# 视觉大模型配置
+vision_language_model:
+  # Qwen-VL配置
+  qwen_vl:
+    api_key: "${QWEN_VL_API_KEY}"
+    model: "qwen-vl-max"
+    max_tokens: 1000
+    temperature: 0.1
+    top_p: 0.9
+    
+  # 本地视觉模型配置
+  local_vlm:
+    model_path: "models/llava-v1.5-7b"
+    vision_tower: "openai/clip-vit-large-patch14"
+    device: "cuda"
+    load_in_8bit: true
+    
+  # 提示词模板
+  prompts:
+    scene_description: |
+      请详细描述当前场景，包括：
+      1. 场景中的主要物体和它们的位置关系
+      2. 物体的状态（正常/异常）
+      3. 潜在的安全隐患
+      4. 建议的巡检重点
+      
+    object_analysis: |
+      请分析这个物体：
+      1. 物体类型和功能
+      2. 当前状态是否正常
+      3. 是否有损坏或异常
+      4. 是否需要维护或检查
+
+# 语言模型配置
+language_model:
+  # DeepSeek配置
+  deepseek:
+    api_key: "${DEEPSEEK_API_KEY}"
+    model: "deepseek-chat"
+    base_url: "https://api.deepseek.com"
+    temperature: 0.7
+    max_tokens: 2000
+    
+  # 本地模型配置
+  local_llm:
+    # Ollama配置
+    ollama:
+      url: "http://localhost:11434"
+      model: "deepseek-r1-distill-qwen:7b"
+      temperature: 0.8
+      num_ctx: 4096
+      
+    # Transformers配置
+    transformers:
+      model_path: "models/deepseek-r1-distill-qwen-7b"
+      device_map: "auto"
+      torch_dtype: "float16"
+      load_in_8bit: true
+      
+  # 提示词模板
+  system_prompt: |
+    你是一个电网巡检机器小车的智能体，负责执行电网巡检任务。
+    你可以控制机器人移动、使用摄像头观察环境、检测物体、追踪目标、避障等。
+    
+    你的能力包括：
+    1. 移动控制：控制机器人前进、后退、转向
+    2. 视觉感知：使用YOLO检测物体，使用视觉大模型分析场景
+    3. 目标追踪：追踪特定物体并保持安全距离
+    4. 障碍物检测：使用激光雷达检测安全方向
+    5. 文字识别：读取设备标签和警告标志
+    
+    请根据用户的任务要求，制定合理的执行计划，并安全地完成任务。
+
+# OCR配置
+ocr:
+  # Tesseract配置
+  tesseract:
+    data_path: "/usr/share/tesseract-ocr/4.00/tessdata"
+    languages: ["eng", "chi_sim"]
+    config: "--oem 3 --psm 6"
+    
+  # EasyOCR配置
+  easyocr:
+    languages: ["en", "ch_sim"]
+    gpu: true
+    model_storage_directory: "models/easyocr"
+    download_enabled: true
+    
+  # 预处理配置
+  preprocessing:
+    resize_factor: 2.0
+    denoise: true
+    adaptive_threshold: true
+    deskew: true
+
+# 模型缓存配置
+model_cache:
+  enabled: true
+  cache_dir: "/tmp/pgi_agent_model_cache"
+  max_size_gb: 5
+  cleanup_interval_hours: 24
+  
+# 性能优化配置
+performance:
+  # Jetson Orin Nano优化
+  jetson:
+    use_tensorrt: true
+    trt_precision: "FP16"
+    trt_max_workspace_size: 1 << 30  # 1GB
+    
+  # 批处理配置
+  batch_processing:
+    enabled: true
+    batch_size: 4
+    max_queue_size: 10
+    
+  # 内存管理
+  memory:
+    max_gpu_memory: "8GB"
+    model_swap_threshold: 0.8  # GPU内存使用率阈值
+    enable_model_offloading: true

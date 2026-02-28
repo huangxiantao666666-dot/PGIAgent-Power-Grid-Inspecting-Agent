@@ -1,0 +1,9 @@
+# 视觉大模型检测服务定义
+# 请求参数
+# 无参数，直接使用当前画面
+
+---
+# 响应参数
+bool success       # 是否成功
+string message     # 返回消息
+string description # 场景描述

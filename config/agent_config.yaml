@@ -1,0 +1,126 @@
+# PGIAgent 智能体配置
+
+# 智能体行为配置
+agent:
+  name: "PowerGridInspectionAgent"
+  description: "电网巡检机器小车智能体"
+  max_iterations: 20  # 最大迭代次数
+  timeout_seconds: 300  # 任务超时时间
+  
+  # 任务规划配置
+  planning:
+    use_reflection: true  # 是否使用反思机制
+    reflection_depth: 2  # 反思深度
+    max_retries: 3  # 工具调用最大重试次数
+    
+  # 安全配置
+  safety:
+    max_velocity: 0.5  # 最大线速度 (m/s)
+    max_angular_velocity: 1.0  # 最大角速度 (rad/s)
+    min_obstacle_distance: 0.3  # 最小障碍物距离 (m)
+    emergency_stop_distance: 0.2  # 紧急停止距离 (m)
+
+# 工具配置
+tools:
+  move:
+    default_velocity: 0.2  # 默认移动速度 (m/s)
+    default_seconds: 2.0  # 默认移动时间 (s)
+    angular_scaling: 0.5  # 角度缩放因子
+    
+  yolo_detect:
+    default_threshold: 0.8  # 默认置信度阈值
+    model_path: "yolo11n.pt"  # YOLO模型路径
+    classes:  # 关注的类别
+      - "person"
+      - "electric_box"
+      - "transformer"
+      - "cable"
+      - "warning_sign"
+      
+  track:
+    default_target: "person"  # 默认追踪目标
+    tracking_distance: 1.2  # 追踪距离 (m)
+    tracking_timeout: 30  # 追踪超时时间 (s)
+    
+  vlm_detect:
+    model: "qwen-vl-max"  # 视觉大模型
+    max_tokens: 1000  # 最大输出token数
+    temperature: 0.1  # 温度参数
+    
+  obstacle_check:
+    scan_topic: "/scan"  # 激光雷达话题
+    safe_angle_range: 60  # 安全角度范围 (度)
+    min_safe_distance: 0.5  # 最小安全距离 (m)
+    
+  ocr:
+    languages: ["en", "ch_sim"]  # OCR支持的语言
+    use_easyocr: true  # 是否使用EasyOCR
+
+# ROS话题配置
+ros_topics:
+  # 相机话题
+  camera:
+    rgb: "/depth_cam/rgb/image_raw"
+    depth: "/depth_cam/depth/image_raw"
+    compressed_rgb: "/depth_cam/rgb/image_raw/compressed"
+    
+  # 控制话题
+  control:
+    cmd_vel: "/cmd_vel"
+    controller_cmd_vel: "/controller/cmd_vel"
+    
+  # 感知话题
+  perception:
+    target_info: "/perception/target_info"
+    
+  # 传感器话题
+  sensors:
+    lidar: "/scan"
+    imu: "/imu"
+    odom: "/odom"
+
+# 模型服务配置
+model_services:
+  # DeepSeek API配置
+  deepseek:
+    base_url: "https://api.deepseek.com"
+    api_key: "${DEEPSEEK_API_KEY}"  # 从环境变量读取
+    model: "deepseek-chat"
+    temperature: 0.7
+    max_tokens: 2000
+    
+  # Qwen API配置
+  qwen:
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: "${QWEN_API_KEY}"  # 从环境变量读取
+    vision_model: "qwen-vl-max"
+    chat_model: "qwen-max"
+    
+  # 本地模型配置
+  local:
+    ollama_url: "http://localhost:11434"
+    local_model: "deepseek-r1-distill-qwen:7b"
+    use_gpu: true
+    gpu_memory_limit: "8GB"
+
+# 日志配置
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file_path: "/tmp/pgi_agent.log"
+  max_file_size: 10485760  # 10MB
+  backup_count: 5
+  
+# 性能配置
+performance:
+  # Jetson Orin Nano优化
+  jetson_optimization: true
+  use_tensorrt: true
+  fp16_precision: true
+  
+  # 内存管理
+  model_cache_size: 2  # 缓存模型数量
+  image_cache_size: 10  # 缓存图像数量
+  
+  # 网络优化
+  use_local_fallback: true  # 网络失败时使用本地模型
+  request_timeout: 30  # API请求超时时间 (s)

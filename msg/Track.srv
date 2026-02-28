@@ -1,0 +1,8 @@
+# 目标追踪服务定义
+# 请求参数
+string target  # 追踪目标 (如"person", "electric_box")
+
+---
+# 响应参数
+bool success   # 是否成功
+string message # 返回消息
