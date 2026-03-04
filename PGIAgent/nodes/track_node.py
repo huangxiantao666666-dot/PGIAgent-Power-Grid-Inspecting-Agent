@@ -10,7 +10,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
-from pgi_agent_msgs.srv import Track, TrackResponse
+from PGIAgent.srv import Track
 from std_srvs.srv import Trigger
 from cv_bridge import CvBridge
 import cv2

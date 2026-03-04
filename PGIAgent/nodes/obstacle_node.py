@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import LaserScan
-from pgi_agent_msgs.srv import CheckObstacle, CheckObstacleResponse
+from PGIAgent.srv import CheckObstacle
 import numpy as np
 import math
 from threading import Lock

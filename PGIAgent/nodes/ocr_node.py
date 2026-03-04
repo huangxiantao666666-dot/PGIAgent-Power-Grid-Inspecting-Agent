@@ -9,13 +9,15 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import Image
-from pgi_agent_msgs.srv import OCR, OCRResponse
+from PGIAgent.srv import OCR
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import time
 from threading import Lock
 import os
+from collections import deque
+import concurrent.futures
 
 # 尝试导入OCR库
 try:
@@ -84,6 +86,21 @@ class OCRNode(Node):
         elif self.ocr_engine == 'tesseract' and not TESSERACT_AVAILABLE:
             self.get_logger().warning("tesseract不可用，切换到模拟模式")
             self.use_simulation = True
+            
+        
+        # 新增：性能统计
+        self.stats = {
+            'total_requests': 0,
+            'total_time': 0.0,
+            'max_time': 0.0,
+            'success_count': 0
+        }
+        
+        # 新增：图像缓存
+        self.frame_queue = deque(maxlen=3)
+        
+        # 新增：定期性能报告
+        self.stats_timer = self.create_timer(60.0, self._report_stats)
         
         # 初始化工具
         self.bridge = CvBridge()
@@ -170,7 +187,7 @@ class OCRNode(Node):
                     response.texts = []
                     response.confidences = []
                     response.positions = []
-                    return response
+                    return response  # ✅ 必须显式返回
                 
                 frame = self.latest_frame.copy()
             
@@ -181,7 +198,8 @@ class OCRNode(Node):
                 ocr_result = self._perform_ocr(frame)
             
             # 过滤和验证结果
-            filtered_result = self._filter_ocr_results(ocr_result)
+            # filtered_result = self._filter_ocr_results(ocr_result)
+            filtered_result = ocr_result
             
             # 填充响应
             response.success = True
@@ -189,13 +207,13 @@ class OCRNode(Node):
             response.texts = filtered_result['texts']
             response.confidences = filtered_result['confidences']
             response.positions = filtered_result['positions']
-            response.engine = self.ocr_engine
             
             self.get_logger().info(
-                f"OCR识别完成: {response.message}, "
-                f"引擎: {response.engine}"
+                f"OCR识别完成: {response.message}"
             )
             
+            return response  # ✅ 成功时返回
+        
         except Exception as e:
             self.get_logger().error(f"OCR识别过程中发生错误: {e}")
             response.success = False
@@ -203,8 +221,28 @@ class OCRNode(Node):
             response.texts = []
             response.confidences = []
             response.positions = []
-        
-        return response
+            
+            return response  # ✅ 失败时也返回
+    
+    def _perform_ocr_with_timeout(self, frame, timeout=5.0):
+        """带超时的OCR执行"""
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(self._perform_ocr, frame)
+            return future.result(timeout=timeout)
+    
+    def _report_stats(self):
+        """定期报告性能统计"""
+        if self.stats['total_requests'] > 0:
+            avg_time = self.stats['total_time'] / self.stats['total_requests']
+            success_rate = self.stats['success_count'] / self.stats['total_requests']
+            
+            self.get_logger().info(
+                f"OCR性能统计: "
+                f"请求={self.stats['total_requests']}, "
+                f"成功率={success_rate:.1%}, "
+                f"平均耗时={avg_time:.2f}s, "
+                f"最大耗时={self.stats['max_time']:.2f}s"
+            )
     
     def _perform_ocr(self, frame):
         """执行实际的OCR识别"""
@@ -449,58 +487,117 @@ class OCRNode(Node):
         filtered_confidences = []
         filtered_positions = []
         
+        # 检查ocr_result是否包含必要的键
+        if not all(key in ocr_result for key in ['texts', 'confidences', 'positions']):
+            self.get_logger().warn("OCR结果格式不正确")
+            return {
+                'texts': filtered_texts,
+                'confidences': filtered_confidences,
+                'positions': filtered_positions
+            }
+        
         for text, confidence, position in zip(
             ocr_result['texts'],
             ocr_result['confidences'],
             ocr_result['positions']
         ):
+            # 基础过滤：置信度阈值
+            if confidence < self.confidence_threshold:
+                continue
+            
+            # 文本长度检查
+            if len(text) > self.max_text_length:
+                continue
+            
+            # 空文本检查
+            if not text or text.isspace():
+                continue
+            
             # 检查是否包含电力设备关键词
             contains_keyword = any(
                 keyword in text for keyword in self.power_keywords
             )
             
-            # 如果包含关键词或置信度足够高，则保留
-            if contains_keyword or confidence >= self.confidence_threshold:
+            # 检查是否包含数字和单位（电力设备常见）
+            has_number = any(char.isdigit() for char in text)
+            has_unit = any(unit in text for unit in ['kV', 'V', 'A', 'W', 'Hz', 'kVA', 'kW'])
+            
+            # 保留条件：
+            # 1. 包含电力关键词
+            # 2. 或包含数字和单位（可能是仪表读数）
+            # 3. 或置信度非常高（>0.9）
+            if (contains_keyword or 
+                (has_number and has_unit) or 
+                confidence >= 0.9):
+                
                 filtered_texts.append(text)
                 filtered_confidences.append(confidence)
                 filtered_positions.append(position)
+                
+                self.get_logger().debug(
+                    f"保留文本: '{text}' (置信度: {confidence:.2f}), "
+                    f"位置: {position}, 关键词: {contains_keyword}"
+                )
+            else:
+                self.get_logger().debug(
+                    f"过滤文本: '{text}' (置信度: {confidence:.2f}) - 无关内容"
+                )
         
         return {
             'texts': filtered_texts,
             'confidences': filtered_confidences,
             'positions': filtered_positions
         }
-    
-    def destroy_node(self):
-        """清理资源"""
-        if self.reader is not None:
-            # 清理OCR资源
-            pass
-        super().destroy_node()
-
 
 def main(args=None):
+    """
+    OCR节点的主函数
+    初始化ROS2，创建节点，使用多线程执行器运行
+    """
+    # 初始化ROS2
     rclpy.init(args=args)
     
+    node = None
+    executor = None
+    
     try:
+        # 创建OCR节点
         node = OCRNode()
         
-        # 使用多线程执行器
-        executor = MultiThreadedExecutor()
+        # 使用多线程执行器支持并发服务调用
+        executor = MultiThreadedExecutor(num_threads=4)
         executor.add_node(node)
         
-        try:
-            executor.spin()
-        except KeyboardInterrupt:
-            node.get_logger().info("OCR节点正在关闭...")
-        finally:
-            executor.shutdown()
-            node.destroy_node()
-            
+        node.get_logger().info("OCR节点已启动，等待请求...")
+        
+        # 开始事件循环
+        executor.spin()
+        
+    except KeyboardInterrupt:
+        # 用户按Ctrl+C时的优雅退出
+        if node:
+            node.get_logger().info("用户中断，正在关闭OCR节点...")
+        
     except Exception as e:
-        print(f"OCR节点启动失败: {e}")
+        # 其他异常
+        if node:
+            node.get_logger().error(f"OCR节点运行出错: {e}")
+        else:
+            print(f"OCR节点创建失败: {e}")
+        
     finally:
+        # 清理资源
+        if executor:
+            executor.shutdown()
+        
+        if node:
+            node.destroy_node()
+        
+        # 关闭ROS2
         rclpy.shutdown()
+        
+        if node:
+            node.get_logger().info("OCR节点已关闭")
 
 
 if __name__ == '__main__':

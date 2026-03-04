@@ -19,43 +19,53 @@ PGIAgent is a complete intelligent agent system that integrates large language m
 
 ```
 PGIAgent/
-├── agent/                    # Agent Core
-│   ├── state.py             # State management
-│   ├── tools.py             # Tool function encapsulation
-│   ├── agent_graph.py       # LangGraph workflow
-│   ├── prompts.py           # Prompt templates
-│   └── __init__.py
-├── nodes/                   # ROS2 Nodes
-│   ├── move_node.py         # Motion control node
-│   ├── detection_node.py    # Object detection node
-│   ├── vlm_node.py          # Vision language model node
-│   ├── track_node.py        # Target tracking node
-│   ├── obstacle_node.py     # Obstacle detection node
-│   └── ocr_node.py          # OCR node
-├── msg/                     # ROS2 Service Definitions
-│   ├── MoveCommand.srv
-│   ├── YOLODetect.srv
-│   ├── VLMDetect.srv
-│   ├── Track.srv
-│   ├── CheckObstacle.srv
-│   └── OCR.srv
 ├── config/                  # Configuration Files
 │   ├── agent_config.yaml    # Agent configuration
 │   ├── model_config.yaml    # Model configuration
 │   └── ros_params.yaml      # ROS parameters
-├── scripts/                 # Utility Scripts
-│   ├── test_agent.py        # Test script
-│   ├── install_deps.sh      # Dependency installation
-│   └── benchmark_jetson.py  # Performance testing
 ├── docs/                    # Documentation
 │   └── jetson_setup.md      # Jetson deployment guide
-├── models/                  # Model files
-├── launch/                  # ROS2 launch files
-├── package.xml              # ROS2 package definition
-├── setup.py                 # Python package configuration
-├── requirements.txt         # Python dependencies
+├── launch/                  # ROS2 Launch Files
+│   ├── agent.launch.py      # Launch all nodes + agent
+│   ├── agent_only.launch.py # Launch agent only
+│   └── tools.launch.py      # Launch tool nodes only
+├── PGIAgent/                # Python Package
+│   ├── agent/               # Agent Core
+│   │   ├── agent_graph.py   # LangGraph workflow
+│   │   ├── prompts.py       # Prompt templates
+│   │   ├── state.py         # State management
+│   │   ├── tools.py         # Tool function encapsulation
+│   │   └── __init__.py
+│   ├── nodes/               # ROS2 Nodes
+│   │   ├── detection_node.py    # Object detection node
+│   │   ├── move_node.py         # Motion control node
+│   │   ├── obstacle_node.py     # Obstacle detection node
+│   │   ├── ocr_node.py          # OCR node
+│   │   ├── track_node.py        # Target tracking node
+│   │   └── vlm_node.py          # Vision language model node
+│   ├── scripts/             # Utility Scripts
+│   │   ├── test_agent.py    # Test script
+│   │   ├── test_launch.py   # Launch test script
+│   │   └── __init__.py
+│   └── srv/                 # ROS2 Service Definitions
+│       ├── CheckObstacle.srv
+│       ├── MoveCommand.srv
+│       ├── OCR.srv
+│       ├── Track.srv
+│       ├── VLMDetect.srv
+│       └── YOLODetect.srv
+├── resource/                # ROS2 Resource Files
+│   └── PGIAgent             # Package marker file
+├── scripts/                 # System Scripts
+│   └── install_deps.sh      # Dependency installation script
 ├── .env.example             # Environment variables example
-└── .gitignore             
+├── .gitignore              # Git ignore file
+├── LICENSE                  # MIT License
+├── package.xml              # ROS2 package definition (format 3)
+├── README.md               # English documentation
+├── READMEcn.md             # Chinese documentation
+├── requirements.txt        # Python dependencies
+└── setup.py               # Python package configuration (ament_python)
 ```
 
 ## Quick Start
@@ -303,7 +313,7 @@ agent:
   planning:
     use_llm_planning: true
     max_plan_steps: 10
-    
+  
   safety:
     max_velocity: 0.5
     max_angular_velocity: 1.0
@@ -318,17 +328,17 @@ models:
     provider: "deepseek"  # deepseek, qwen, openai, local
     model: "deepseek-chat"
     api_key: "${DEEPSEEK_API_KEY}"
-    
+  
   vlm:
     provider: "qwen"
     model: "qwen-vl-max"
-    
+  
   yolo:
     model_path: "./models/yolo11n.pt"
     engine_path: "./models/yolo11n.engine"
     conf_threshold: 0.8
     img_size: 320
-    
+  
   ocr:
     provider: "easyocr"
     languages: ["ch_sim", "en"]
@@ -501,11 +511,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [JetAuto Robot Platform](https://www.jetson.ai/jetauto)
 - [ROS2](https://docs.ros.org/) - Robot Operating System
-- [LangGraph](https://langchain-ai.github.io/langgraph/) - Agent workflow
-- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics) - Object detection
-- [NVIDIA Jetson](https://developer.nvidia.com/embedded-computing) - Edge AI platform
-
-
----
-
-**Note**: This project is a research prototype. Conduct thorough testing and safety assessment before actual deployment. Power grid inspection scenarios involve high-voltage equipment, always follow on-site safety regulations.
+- [Lang

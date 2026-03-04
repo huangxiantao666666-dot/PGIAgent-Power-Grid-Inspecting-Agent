@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import Image
-from pgi_agent_msgs.srv import YOLODetect, YOLODetectResponse
+from PGIAgent.srv import YOLODetect
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
@@ -58,6 +58,14 @@ class DetectionNode(Node):
         self.service_name = self.get_parameter('service_name').value
         self.use_tensorrt = self.get_parameter('use_tensorrt').value
         self.use_simulation = self.get_parameter('use_simulation').value or not YOLO_AVAILABLE
+        
+        self.stats = {
+            'total_requests': 0,
+            'total_time': 0.0,
+            'max_time': 0.0,
+            'success_count': 0
+        }
+        self.stats_timer = self.create_timer(60.0, self._report_stats)
         
         # 初始化工具
         self.bridge = CvBridge()
@@ -140,6 +148,9 @@ class DetectionNode(Node):
     
     def handle_detect_request(self, request, response):
         """处理检测请求"""
+        self.stats['total_requests'] += 1
+        start_time = time.time()
+        
         try:
             # 获取阈值
             threshold = request.threshold if request.threshold > 0 else self.default_threshold
@@ -152,6 +163,12 @@ class DetectionNode(Node):
                     response.objects = []
                     response.distances = []
                     response.positions = []
+                    
+                    elapsed = time.time() - start_time
+                    self.stats['total_time'] += elapsed
+                    self.stats['max_time'] = max(self.stats['max_time'], elapsed)
+                    if response.success:
+                        self.stats['success_count'] += 1
                     return response
                 
                 color_frame = self.latest_color_frame.copy()
@@ -169,7 +186,6 @@ class DetectionNode(Node):
             response.objects = detection_result['objects']
             response.distances = detection_result['distances']
             response.positions = detection_result['positions']
-            response.frame_rate = self.frame_rate
             
             self.get_logger().info(f"检测完成: {response.message}")
             
@@ -181,63 +197,75 @@ class DetectionNode(Node):
             response.distances = []
             response.positions = []
         
+        elapsed = time.time() - start_time
+        self.stats['total_time'] += elapsed
+        self.stats['max_time'] = max(self.stats['max_time'], elapsed)
+        if response.success:
+            self.stats['success_count'] += 1
         return response
     
     def _perform_detection(self, color_frame, depth_frame, threshold):
         """执行实际的YOLO检测"""
-        h, w = color_frame.shape[:2]
-        
-        # 运行YOLO检测
-        results = self.model(
-            color_frame,
-            imgsz=self.img_size,
-            conf=threshold,
-            verbose=False
-        )
-        
-        objects = []
-        distances = []
-        positions = []
-        
         if results[0].boxes is not None and len(results[0].boxes) > 0:
-            boxes = results[0].boxes.xyxy.cpu().numpy()
-            confidences = results[0].boxes.conf.cpu().numpy()
-            class_ids = results[0].boxes.cls.cpu().numpy()
+            h, w = color_frame.shape[:2]
             
-            # 获取类别名称
-            if hasattr(results[0], 'names'):
-                class_names = results[0].names
-            else:
-                class_names = {i: f"class_{i}" for i in range(int(max(class_ids)) + 1)}
+            # 运行YOLO检测
+            results = self.model(
+                color_frame,
+                imgsz=self.img_size,
+                conf=threshold,
+                verbose=False
+            )
             
-            for i, (box, conf, cls_id) in enumerate(zip(boxes, confidences, class_ids)):
-                # 计算中心点
-                cx = int((box[0] + box[2]) / 2)
-                cy = int((box[1] + box[3]) / 2)
+            objects = []
+            distances = []
+            positions = []
+            
+            if results[0].boxes is not None and len(results[0].boxes) > 0:
+                boxes = results[0].boxes.xyxy.cpu().numpy()
+                confidences = results[0].boxes.conf.cpu().numpy()
+                class_ids = results[0].boxes.cls.cpu().numpy()
                 
-                # 获取深度值
-                distance = self._get_depth_at_point(depth_frame, cx, cy)
+                # 获取类别名称
+                if hasattr(results[0], 'names'):
+                    class_names = results[0].names
+                else:
+                    class_names = {i: f"class_{i}" for i in range(int(max(class_ids)) + 1)}
                 
-                # 确定位置描述
-                position = self._describe_position(cx, cy, w, h)
-                
-                # 添加到结果
-                class_name = class_names.get(int(cls_id), f"class_{int(cls_id)}")
-                objects.append(class_name)
-                distances.append(float(distance))
-                positions.append(position)
-                
-                # 记录日志
-                self.get_logger().debug(
-                    f"检测到: {class_name} (置信度: {conf:.2f}), "
-                    f"距离: {distance:.2f}m, 位置: {position}"
-                )
-        
-        return {
-            'objects': objects,
-            'distances': distances,
-            'positions': positions
-        }
+                for i, (box, conf, cls_id) in enumerate(zip(boxes, confidences, class_ids)):
+                    # 计算中心点
+                    cx = int((box[0] + box[2]) / 2)
+                    cy = int((box[1] + box[3]) / 2)
+                    
+                    # 获取深度值
+                    distance = self._get_depth_at_point(depth_frame, cx, cy)
+                    
+                    # 确定位置描述
+                    position = self._describe_position(cx, cy, w, h)
+                    
+                    # 添加到结果
+                    class_name = class_names.get(int(cls_id), f"class_{int(cls_id)}")
+                    objects.append(class_name)
+                    distances.append(float(distance))
+                    positions.append(position)
+                    
+                    # 记录日志
+                    self.get_logger().debug(
+                        f"检测到: {class_name} (置信度: {conf:.2f}), "
+                        f"距离: {distance:.2f}m, 位置: {position}"
+                    )
+            
+            return {
+                'objects': objects,
+                'distances': distances,
+                'positions': positions
+            }
+        else:
+            return {
+                'objects': [],
+                'distances': [],
+                'positions': []
+            }
     
     def _simulate_detection(self, color_frame, depth_frame, threshold):
         """模拟检测（用于测试）"""
@@ -263,21 +291,18 @@ class DetectionNode(Node):
         }
     
     def _get_depth_at_point(self, depth_frame, x, y):
-        """获取指定点的深度值"""
         h, w = depth_frame.shape
+        x = max(5, min(x, w - 6))  # 留出边界
+        y = max(5, min(y, h - 6))
         
-        # 确保坐标在范围内
-        x = max(0, min(x, w - 1))
-        y = max(0, min(y, h - 1))
+        # 取5x5区域的中值
+        roi = depth_frame[y-2:y+3, x-2:x+3]
+        valid_depths = roi[roi > 0]
         
-        # 获取深度值（假设深度图单位是毫米）
-        depth_value = depth_frame[y, x]
-        
-        # 转换为米
-        if depth_value > 0:
-            return float(depth_value) / 1000.0
+        if len(valid_depths) > 0:
+            return float(np.median(valid_depths)) / 1000.0
         else:
-            return 0.0
+            return float('nan')  # 用NaN表示无效
     
     def _describe_position(self, x, y, img_width, img_height):
         """描述物体在图像中的位置"""

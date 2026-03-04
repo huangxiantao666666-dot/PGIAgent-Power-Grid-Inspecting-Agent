@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import Image
-from pgi_agent_msgs.srv import VLMDetect, VLMDetectResponse
+from PGIAgent.srv import VLMDetect
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
