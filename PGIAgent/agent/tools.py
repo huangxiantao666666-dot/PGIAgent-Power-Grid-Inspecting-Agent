@@ -37,12 +37,12 @@ class ToolManager:
         
         # 创建服务客户端
         service_types = {
-            self.service_name = '/pgi_agent/move',           # MoveCommand 对应的服务实例
-            self.service_name = '/pgi_agent/yolo_detect',    # YOLODetect 对应的服务实例
-            self.service_name = '/pgi_agent/vlm_detect',     # VLMDetect 对应的服务实例
-            self.service_name = '/pgi_agent/track',          # Track 对应的服务实例
-            self.service_name = '/pgi_agent/check_obstacle', # CheckObstacle 对应的服务实例
-            self.service_name = '/pgi_agent/ocr'            # OCR 对应的服务实例
+            self.service_name : '/pgi_agent/move',           # MoveCommand 对应的服务实例
+            self.service_name : '/pgi_agent/yolo_detect',    # YOLODetect 对应的服务实例
+            self.service_name : '/pgi_agent/vlm_detect',     # VLMDetect 对应的服务实例
+            self.service_name : '/pgi_agent/track',          # Track 对应的服务实例
+            self.service_name : '/pgi_agent/check_obstacle', # CheckObstacle 对应的服务实例
+            self.service_name : '/pgi_agent/ocr',            # OCR 对应的服务实例
         }
         
         for service_name, service_type in service_types.items():
