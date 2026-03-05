@@ -6,7 +6,7 @@ A ROS2 and LangGraph-based intelligent agent system for JetAuto Mecanum Wheel Ro
 
 PGIAgent is a complete intelligent agent system that integrates large language models (LLMs) with robot hardware capabilities to achieve autonomous power grid inspection tasks. The system adopts a modular design supporting multiple vision models, motion control, and environmental perception tools.
 
-![The Project](images\project.png)
+![The Project](images/project.png)
 
 ### Core Features
 
