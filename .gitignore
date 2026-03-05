@@ -234,6 +234,10 @@ debug_images/
 *.bmp
 *.tiff
 
+!images/
+!assets/img/
+!docs/images/
+
 # Task history
 task_history/
 
