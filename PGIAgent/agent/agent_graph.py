@@ -133,6 +133,7 @@ class AgentGraph:
             "execute",
             self._should_continue,
             {
+                "tools":"tools",
                 "continue": "execute",
                 "reflect": "reflect",
                 "complete": END
@@ -244,6 +245,9 @@ class AgentGraph:
         state = update_state_with_tool_result(
             state, tool_name, {}, tool_result, success
         )
+
+        # 执行完成后清空tool标记，防止逻辑死循环
+        state["tool"] = ""
         
         # 如果工具调用成功，进入下一步
         if success:
@@ -292,6 +296,10 @@ class AgentGraph:
     
     def _should_continue(self, state: AgentState) -> str:
         """判断是否继续执行"""
+        # 如果execute节点判定需要使用工具，立即跳转
+        if state.get("tool"):
+            return "tools"
+            
         # 检查是否完成所有步骤
         if state["current_step"] >= len(state["plan"]):
             return "complete"
