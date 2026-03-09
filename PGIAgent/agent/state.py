@@ -3,42 +3,42 @@
 定义LangGraph智能体的状态结构
 """
 
-from typing import TypedDict, List, Optional, Dict, Any
+from typing import TypedDict, List, Optional, Dict, Any, Annotated, Literal, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 # 导入time模块用于时间戳
 import time
-
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage, AnyMessage
+from langgraph.graph.message import add_messages
 
 class AgentState(TypedDict):
     """智能体状态定义"""
     # 任务相关
     task: str  # 当前任务描述
-    task_history: List[str]  # 任务历史
-    current_step: int  # 当前步骤
-    
-    # 环境感知
-    current_scene: Optional[str]  # 当前场景描述
-    detected_objects: List[Dict[str, Any]]  # 检测到的物体
-    obstacle_info: Optional[Dict[str, Any]]  # 障碍物信息
-    ocr_results: List[Dict[str, Any]]  # OCR结果
-    
-    # 机器人状态
-    robot_position: Optional[Dict[str, float]]  # 机器人位置
-    robot_orientation: Optional[float]  # 机器人朝向
-    battery_level: Optional[float]  # 电池电量
-    
-    # 工具调用
-    tool_calls: List[Dict[str, Any]]  # 工具调用历史
-    last_tool_result: Optional[str]  # 上次工具调用结果
-    
+    current_step_num: int  # 当前步骤
+    past_steps: List[Tuple[str, str, str]] # 已完成的步骤 [(步骤, 结果, 状态)]
+    final_answer: Optional[str]
+            
     # 决策相关
     plan: List[str]  # 执行计划
-    reflection: Optional[str]  # 反思结果
     iteration_count: int  # 迭代次数
+    last_step_status: Literal["success", "failure", "pending"]  # 上一步执行结果
     
     # 对话历史
-    messages: List[Dict[str, str]]  # 对话消息历史
+    messages: Annotated[List[AnyMessage], add_messages]  # 对话消息历史
+    
+    
+def create_initial_state(task: str) -> AgentState:
+    """创建初始状态"""
+    return AgentState(
+        task=task,
+        current_step_num=0,
+        past_steps=[],
+        final_answer=None,
+        plan=[],
+        last_step_status="pending",
+        iteration_count=0,
+    )
 
 
 class TaskStatus(Enum):
@@ -120,7 +120,7 @@ class AgentConfig:
     vlm_model: str = "qwen-vl-max"
     
     # 行为配置
-    max_iterations: int = 20
+    max_iterations: int = 10
     use_reflection: bool = True
     reflection_depth: int = 2
     max_retries: int = 3
@@ -146,84 +146,5 @@ class AgentConfig:
     obstacle_service: str = "/pgi_agent/check_obstacle"
     ocr_service: str = "/pgi_agent/ocr"
 
-
-def create_initial_state(task: str) -> AgentState:
-    """创建初始状态"""
-    return AgentState(
-        task=task,
-        task_history=[],
-        current_step=0,
-        current_scene=None,
-        detected_objects=[],
-        obstacle_info=None,
-        ocr_results=[],
-        robot_position=None,
-        robot_orientation=None,
-        battery_level=None,
-        tool_calls=[],
-        last_tool_result=None,
-        plan=[],
-        reflection=None,
-        iteration_count=0,
-        messages=[
-            {"role": "system", "content": "你是一个电网巡检机器小车的智能体，负责执行电网巡检任务。"},
-            {"role": "user", "content": task}
-        ]
-    )
-
-
-def update_state_with_tool_result(
-    state: AgentState,
-    tool_type: str,
-    parameters: Dict[str, Any],
-    result: Dict[str, Any],
-    success: bool = True,
-    error_message: Optional[str] = None
-) -> AgentState:
-    """使用工具结果更新状态"""
-    tool_call = {
-        "tool_type": tool_type,
-        "parameters": parameters,
-        "result": result,
-        "timestamp": time.time() if 'time' in locals() else 0.0,
-        "success": success,
-        "error_message": error_message
-    }
-    
-    state["tool_calls"].append(tool_call)
-    state["last_tool_result"] = str(result) if result else error_message
-    
-    # 根据工具类型更新特定状态
-    if tool_type == ToolType.YOLO_DETECT.value and success:
-        state["detected_objects"] = result.get("objects", [])
-    elif tool_type == ToolType.VLM_DETECT.value and success:
-        state["current_scene"] = result.get("description", "")
-    elif tool_type == ToolType.CHECK_OBSTACLE.value and success:
-        state["obstacle_info"] = result
-    elif tool_type == ToolType.OCR.value and success:
-        state["ocr_results"] = result.get("texts", [])
-    
-    return state
-
-
-def get_state_summary(state: AgentState) -> str:
-    """获取状态摘要"""
-    summary = f"任务: {state['task']}\n"
-    summary += f"当前步骤: {state['current_step']}/{len(state['plan']) if state['plan'] else 0}\n"
-    summary += f"迭代次数: {state['iteration_count']}\n"
-    
-    if state['current_scene']:
-        summary += f"当前场景: {state['current_scene'][:100]}...\n"
-    
-    if state['detected_objects']:
-        summary += f"检测到物体: {len(state['detected_objects'])}个\n"
-    
-    if state['obstacle_info']:
-        summary += f"障碍物信息: 安全方向 {state['obstacle_info'].get('safe_direction', 0)}度\n"
-    
-    if state['tool_calls']:
-        summary += f"工具调用: {len(state['tool_calls'])}次\n"
-    
-    return summary
 
 
