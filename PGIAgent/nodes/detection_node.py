@@ -16,6 +16,7 @@ import numpy as np
 import time
 from threading import Lock
 import os
+import yaml
 
 # 尝试导入YOLO，如果不可用则使用模拟模式
 try:
@@ -24,6 +25,26 @@ try:
 except ImportError:
     YOLO_AVAILABLE = False
     print("警告: ultralytics未安装，使用模拟模式")
+    
+def load_config_with_env(config_path):
+    with open(config_path, 'r') as f:
+        config = f.read()
+    
+    # 替换环境变量
+    for key, value in os.environ.items():
+        placeholder = f"${{{key}}}"
+        if placeholder in config:
+            config = config.replace(placeholder, value)
+    
+    return yaml.safe_load(config)    
+
+try:
+    with open(r"config/tools_param.yaml", 'r', encoding='utf-8') as file:
+        config = load_config_with_env(r"config/tools_param.yaml")
+    print(f"成功加载配置文件: {r'config/tools_param.yaml'}")
+except FileNotFoundError:
+    print(f"错误: 文件 {r'config/tools_param.yaml'} 不存在")
+
 
 
 class DetectionNode(Node):
@@ -32,18 +53,20 @@ class DetectionNode(Node):
     def __init__(self):
         super().__init__('detection_node')
         
+        detect_params = config.get("yolo_detect_node", {}).get("ros__parameters", {})
+        
         # 声明参数
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('model_path', 'yolo11n.pt'),
-                ('engine_path', 'yolo11n.engine'),
-                ('img_size', 320),
-                ('default_threshold', 0.8),
-                ('camera_topic', '/depth_cam/rgb/image_raw'),
-                ('depth_topic', '/depth_cam/depth/image_raw'),
-                ('service_name', '/pgi_agent/yolo_detect'),
-                ('use_tensorrt', False),
+                ('model_path', detect_params.get("model_path", "models\yolo11n.pt")),
+                ('engine_path', detect_params.get("engine_path", "models/yolo11n.engine")),
+                ('img_size', detect_params.get("img_size", 320)),
+                ('default_threshold', detect_params.get("conf_threshold", 0.8)),
+                ('camera_topic', detect_params.get("rgb_topic", "/depth_cam/rgb/image_raw")),
+                ('depth_topic', detect_params.get("rgb_topic", "/depth_cam/rgb/image_raw")),
+                ('service_name', detect_params.get("service_name", "/pgi_agent/detect")),
+                ('use_tensorrt', detect_params.get("use_tensorrt", True)),
                 ('use_simulation', False),
             ]
         )

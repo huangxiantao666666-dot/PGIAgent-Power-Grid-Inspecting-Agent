@@ -18,6 +18,7 @@ from threading import Lock
 import os
 from collections import deque
 import concurrent.futures
+import yaml
 
 # 尝试导入OCR库
 try:
@@ -34,6 +35,26 @@ try:
 except ImportError:
     TESSERACT_AVAILABLE = False
     print("警告: pytesseract或PIL未安装")
+    
+
+def load_config_with_env(config_path):
+    with open(config_path, 'r') as f:
+        config = f.read()
+    
+    # 替换环境变量
+    for key, value in os.environ.items():
+        placeholder = f"${{{key}}}"
+        if placeholder in config:
+            config = config.replace(placeholder, value)
+    
+    return yaml.safe_load(config)    
+
+try:
+    with open(r"config/tools_param.yaml", 'r', encoding='utf-8') as file:
+        config = load_config_with_env(r"config/tools_param.yaml")
+    print(f"成功加载配置文件: {r'config/tools_param.yaml'}")
+except FileNotFoundError:
+    print(f"错误: 文件 {r'config/tools_param.yaml'} 不存在")
 
 
 class OCRNode(Node):
@@ -42,34 +63,45 @@ class OCRNode(Node):
     def __init__(self):
         super().__init__('ocr_node')
         
-        # 声明参数
+        # 从配置文件读取参数
+        ocr_params = config.get('ocr_node', {}).get('ros__parameters', {})
+        
+        # 声明参数（使用yaml中的值作为默认值）
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('camera_topic', '/depth_cam/rgb/image_raw'),
-                ('service_name', '/pgi_agent/ocr'),
-                ('ocr_engine', 'easyocr'),  # easyocr, tesseract, simulation
-                ('languages', ['ch_sim', 'en']),
-                ('confidence_threshold', 0.5),
-                ('preprocess_enabled', True),
-                ('roi_enabled', False),
-                ('roi_x', 0.3),
-                ('roi_y', 0.3),
-                ('roi_width', 0.4),
-                ('roi_height', 0.4),
-                ('use_simulation', False),
-                ('tesseract_path', ''),
-                ('max_text_length', 1000),
+                ('rgb_topic', ocr_params.get('rgb_topic', '/depth_cam/rgb/image_raw')),
+                ('service_name', ocr_params.get('service_name', '/pgi_agent/ocr')),
+                ('ocr_engine', ocr_params.get('ocr_engine', 'easyocr')),
+                ('languages', ocr_params.get('languages', ['en', 'ch_sim'])),
+                ('confidence_threshold', ocr_params.get('confidence_threshold', 0.5)),
+                ('preprocess_enabled', ocr_params.get('preprocess_enabled', True)),
+                ('resize_factor', ocr_params.get('resize_factor', 2.0)),
+                ('denoise', ocr_params.get('denoise', True)),
+                ('adaptive_threshold', ocr_params.get('adaptive_threshold', True)),
+                ('roi_enabled', ocr_params.get('roi_enabled', False)),
+                ('roi_x', ocr_params.get('roi_x', 0.3)),
+                ('roi_y', ocr_params.get('roi_y', 0.3)),
+                ('roi_width', ocr_params.get('roi_width', 0.4)),
+                ('roi_height', ocr_params.get('roi_height', 0.4)),
+                ('tesseract_path', ocr_params.get('tesseract_path', '')),
+                ('gpu', ocr_params.get('gpu', True)),
+                ('batch_size', ocr_params.get('batch_size', 1)),
+                ('max_text_length', ocr_params.get('max_text_length', 1000)),
+                ('use_simulation', ocr_params.get('use_simulation', False)),
             ]
         )
         
         # 获取参数
-        self.camera_topic = self.get_parameter('camera_topic').value
+        self.camera_topic = self.get_parameter('rgb_topic').value
         self.service_name = self.get_parameter('service_name').value
         self.ocr_engine = self.get_parameter('ocr_engine').value
         self.languages = self.get_parameter('languages').value
         self.confidence_threshold = self.get_parameter('confidence_threshold').value
         self.preprocess_enabled = self.get_parameter('preprocess_enabled').value
+        self.resize_factor = self.get_parameter('resize_factor').value
+        self.denoise = self.get_parameter('denoise').value
+        self.adaptive_threshold = self.get_parameter('adaptive_threshold').value
         self.roi_enabled = self.get_parameter('roi_enabled').value
         self.roi_x = self.get_parameter('roi_x').value
         self.roi_y = self.get_parameter('roi_y').value
@@ -77,6 +109,8 @@ class OCRNode(Node):
         self.roi_height = self.get_parameter('roi_height').value
         self.use_simulation = self.get_parameter('use_simulation').value
         self.tesseract_path = self.get_parameter('tesseract_path').value
+        self.gpu = self.get_parameter('gpu').value
+        self.batch_size = self.get_parameter('batch_size').value
         self.max_text_length = self.get_parameter('max_text_length').value
         
         # 检查OCR引擎可用性

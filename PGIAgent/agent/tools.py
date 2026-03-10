@@ -565,8 +565,6 @@ class ToolManager:
     
     # ========== 模拟方法 ==========
     
-    # ========== 模拟方法 ==========
-    
     # ----- 移动模拟 -----
     def _simulate_move(self, velocity: Optional[float], angle: float, seconds: Optional[float]) -> Dict[str, Any]:
         """模拟移动"""
@@ -827,37 +825,69 @@ def create_tool_functions(tool_manager: Optional[ToolManager] = None) -> Dict[st
     
     @tool
     def move_wrapper(velocity: Optional[float] = None, angle: float = 0.0, seconds: Optional[float] = None) -> str:
-        """移动工具包装函数"""
+        """
+        移动工具
+        Args:
+            velocity: 移动速度 (m/s)，正数为前进，负数为后退
+            angle: 转向角度 (度)，0为直行，正数为左转，负数为右转
+            seconds: 移动时间 (秒)
+        Returns:
+            移动结果
+        """
         result = tm.move(velocity, angle, seconds)
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     def yolo_detect_wrapper(threshold: Optional[float] = None) -> str:
-        """YOLO检测工具包装函数"""
+        """
+        YOLO物体检测工具
+        Args:
+            threshold: 置信度阈值 (0.0-1.0)
+        Returns:
+            检测结果
+        """
         result = tm.yolo_detect(threshold)
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     def vlm_detect_wrapper() -> str:
-        """VLM检测工具包装函数"""
+        """
+        视觉大模型场景理解工具
+        Returns:
+            场景描述结果
+        """
         result = tm.vlm_detect()
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     def track_wrapper(target: Optional[str] = None) -> str:
-        """追踪工具包装函数"""
+        """
+        目标追踪工具
+        Args:
+            target: 追踪目标 (如"person", "electric_box")
+        Returns:
+            追踪结果
+        """
         result = tm.track(target)
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     def check_obstacle_wrapper() -> str:
-        """障碍物检测工具包装函数"""
+        """
+        障碍物检测工具
+        Returns:
+            障碍物检测结果
+        """
         result = tm.check_obstacle()
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     def ocr_wrapper() -> str:
-        """OCR工具包装函数"""
+        """
+        OCR文字识别工具
+        Returns:
+            OCR识别结果
+        """
         result = tm.ocr()
         return json.dumps(result, ensure_ascii=False)
     
@@ -880,37 +910,69 @@ def create_async_tool_functions(tool_manager: Optional[ToolManager] = None) -> D
     
     @tool
     async def move_wrapper(velocity: Optional[float] = None, angle: float = 0.0, seconds: Optional[float] = None) -> str:
-        """异步移动工具包装函数"""
+        """
+        移动工具
+        Args:
+            velocity: 移动速度 (m/s)，正数为前进，负数为后退
+            angle: 转向角度 (度)，0为直行，正数为左转，负数为右转
+            seconds: 移动时间 (秒)
+        Returns:
+            移动结果
+        """
         result = await tm.move_async(velocity, angle, seconds)
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     async def yolo_detect_wrapper(threshold: Optional[float] = None) -> str:
-        """异步YOLO检测工具包装函数"""
+        """
+        YOLO物体检测工具
+        Args:
+            threshold: 置信度阈值 (0.0-1.0)
+        Returns:
+            检测结果
+        """
         result = await tm.yolo_detect_async(threshold)
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     async def vlm_detect_wrapper() -> str:
-        """异步VLM检测工具包装函数"""
+        """
+        视觉大模型场景理解工具
+        Returns:
+            场景描述结果
+        """
         result = await tm.vlm_detect_async()
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     async def track_wrapper(target: Optional[str] = None) -> str:
-        """异步追踪工具包装函数"""
+        """
+        目标追踪工具
+        Args:
+            target: 追踪目标 (如"person", "electric_box")
+        Returns:
+            追踪结果
+        """
         result = await tm.track_async(target)
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     async def check_obstacle_wrapper() -> str:
-        """障碍物检测工具包装函数"""
+        """
+        障碍物检测工具
+        Returns:
+            障碍物检测结果
+        """
         result = await tm.check_obstacle_async()
         return json.dumps(result, ensure_ascii=False)
     
     @tool
     async def ocr_wrapper() -> str:
-        """OCR工具包装函数"""
+        """
+        OCR文字识别工具
+        Returns:
+            OCR识别结果
+        """"
         result = await tm.ocr_async()
         return json.dumps(result, ensure_ascii=False)
     
@@ -924,35 +986,35 @@ def create_async_tool_functions(tool_manager: Optional[ToolManager] = None) -> D
     }
 
 
-def load_tool_config(config_path: str) -> AgentConfig:
-    """从配置文件加载工具配置"""
-    if not os.path.exists(config_path):
-        return AgentConfig()
+# def load_tool_config(config_path: str) -> AgentConfig:
+#     """从配置文件加载工具配置"""
+#     if not os.path.exists(config_path):
+#         return AgentConfig()
     
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config_data = yaml.safe_load(f)
+#     with open(config_path, 'r', encoding='utf-8') as f:
+#         config_data = yaml.safe_load(f)
     
-    config = AgentConfig()
+#     config = AgentConfig()
     
-    # 更新配置...
-    if 'agent' in config_data:
-        agent_config = config_data['agent']
-        config.max_iterations = agent_config.get('max_iterations', config.max_iterations)
-        config.use_reflection = agent_config.get('planning', {}).get('use_reflection', config.use_reflection)
+#     # 更新配置...
+#     if 'agent' in config_data:
+#         agent_config = config_data['agent']
+#         config.max_iterations = agent_config.get('max_iterations', config.max_iterations)
+#         config.use_reflection = agent_config.get('planning', {}).get('use_reflection', config.use_reflection)
     
-    if 'tools' in config_data:
-        tools_config = config_data['tools']
-        if 'move' in tools_config:
-            move_config = tools_config['move']
-            config.default_move_velocity = move_config.get('default_velocity', config.default_move_velocity)
-            config.default_move_seconds = move_config.get('default_seconds', config.default_move_seconds)
+#     if 'tools' in config_data:
+#         tools_config = config_data['tools']
+#         if 'move' in tools_config:
+#             move_config = tools_config['move']
+#             config.default_move_velocity = move_config.get('default_velocity', config.default_move_velocity)
+#             config.default_move_seconds = move_config.get('default_seconds', config.default_move_seconds)
         
-        if 'yolo_detect' in tools_config:
-            yolo_config = tools_config['yolo_detect']
-            config.yolo_threshold = yolo_config.get('default_threshold', config.yolo_threshold)
+#         if 'yolo_detect' in tools_config:
+#             yolo_config = tools_config['yolo_detect']
+#             config.yolo_threshold = yolo_config.get('default_threshold', config.yolo_threshold)
         
-        if 'track' in tools_config:
-            track_config = tools_config['track']
-            config.tracking_distance = track_config.get('tracking_distance', config.tracking_distance)
+#         if 'track' in tools_config:
+#             track_config = tools_config['track']
+#             config.tracking_distance = track_config.get('tracking_distance', config.tracking_distance)
     
-    return config
+#     return config

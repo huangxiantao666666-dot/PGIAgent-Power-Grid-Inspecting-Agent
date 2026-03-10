@@ -1,0 +1,231 @@
+# ROS2参数配置
+# 所有服务节点的配置参数
+
+# 移动工具节点参数
+move_node:
+  ros__parameters:
+    # 默认参数
+    default_velocity: 0.2  # 默认速度 (m/s)
+    default_seconds: 2.0  # 默认时间 (s)
+    angular_scaling: 0.5  # 角度缩放因子
+    
+    # 话题配置
+    cmd_vel_topic: "/cmd_vel"
+    service_name: "/pgi_agent/move"
+    
+    # 安全参数
+    max_velocity: 0.5  # 最大速度 (m/s)
+    emergency_stop_distance: 0.2  # 紧急停止距离 (m)
+
+    # 控制频率
+    control_frequency: 10.0
+
+# YOLO检测节点参数
+yolo_detect_node:
+  ros__parameters:
+    # 模型参数
+    model_path: "models/yolo11n.pt"  # PyTorch模型路径
+    engine_path: "models/yolo11n.engine"  # TensorRT引擎路径
+    conf_threshold: 0.8  # 置信度阈值
+    imgsz: 320  # 输入图像尺寸
+    use_tensorrt: True  # 是否使用TensorRT
+    
+    # 话题配置
+    rgb_topic: "/depth_cam/rgb/image_raw"  # RGB图像话题
+    depth_topic: "/depth_cam/depth/image_raw"  # 深度图像话题
+    service_name: "/pgi_agent/yolo_detect"  # 服务名称
+    
+    # 检测参数
+    classes: [0]  # 检测类别 (0=person)
+    use_depth: True  # 是否使用深度信息
+    max_detections: 10  # 最大检测数量
+    min_detect_distance: 0.3  # 最小有效检测距离 (m)
+    max_detect_distance: 10.0  # 最大有效检测距离 (m)
+
+    # 模拟模式
+    use_simulation: False  # 是否使用模拟模式
+
+    # 控制频率
+    control_frequency: 10.0
+
+# VLM检测节点参数
+vlm_detect_node:
+  ros__parameters:
+    # API配置
+    provider: "qwen"  # VLM提供商 (qwen, deepseek, openai, local)
+    api_key: "${QWEN_VL_API_KEY}"  # API密钥
+    base_url: ""  # API基础URL
+    model: "qwen-vl-max"  # 模型名称
+    
+    # 话题配置
+    rgb_topic: "/depth_cam/rgb/image_raw"  # RGB图像话题
+    service_name: "/pgi_agent/vlm_detect"  # 服务名称
+    
+    # 请求参数
+    max_tokens: 1000  # 最大token数
+    temperature: 0.1  # 温度参数
+    timeout: 30  # 请求超时时间 (s)
+    image_quality: "high"  # 图像质量 (high, low)
+    max_image_size: 1024  # 最大图像尺寸
+
+    # 模拟模式
+    use_simulation: False  # 是否使用模拟模式
+
+    # 控制频率
+    control_frequency: 10.0
+
+# 追踪节点参数
+track_node:
+  ros__parameters:
+    # 模型参数
+    model_path: "yolo11n.pt"  # YOLO模型路径
+    
+    # 追踪参数
+    default_target: "person"  # 默认追踪目标
+    tracking_distance: 1.2  # 目标距离 (m)
+    distance_tolerance: 0.2  # 距离容差 (m)
+    max_tracking_time: 60.0  # 最大追踪时间 (s)
+    search_timeout: 10.0  # 搜索超时时间 (s)
+    
+    # 话题配置
+    rgb_topic: "/depth_cam/rgb/image_raw"  # RGB图像话题
+    depth_topic: "/depth_cam/depth/image_raw"  # 深度图像话题
+    cmd_vel_topic: "/cmd_vel"  # 控制命令话题
+    service_name: "/pgi_agent/track"  # 服务名称
+    
+    # PID参数 - 距离控制
+    kp_distance: 0.5
+    ki_distance: 0.0
+    kd_distance: 0.1
+    
+    # PID参数 - 角度控制
+    kp_angle: 0.8
+    ki_angle: 0.0
+    kd_angle: 0.2
+    
+    # 速度限制
+    max_linear_vel: 0.3  # 最大线速度 (m/s)
+    max_angular_vel: 0.5  # 最大角速度 (rad/s)
+
+    # 模拟模式
+    use_simulation: False  # 是否使用模拟模式
+
+    # 控制频率
+    control_frequency: 10.0
+
+# 障碍物检测节点参数
+obstacle_check_node:
+  ros__parameters:
+    # 激光雷达参数
+    scan_topic: "/scan"  # 激光雷达扫描话题
+    service_name: "/pgi_agent/check_obstacle"  # 服务名称
+    
+    # 检测参数
+    min_safe_distance: 0.5  # 最小安全距离 (m)
+    warning_distance: 0.4  # 警告距离 (m)
+    danger_distance: 0.3  # 危险距离 (m)
+    critical_distance: 0.2  # 临界距离 (m)
+    angle_resolution: 45  # 角度分辨率 (度)
+    
+    # 区域划分
+    front_angle: 60  # 前方角度范围 (度)
+    left_angle: 60  # 左侧角度范围 (度)
+    right_angle: 60  # 右侧角度范围 (度)
+    
+    # 有效距离范围
+    min_valid_distance: 0.1  # 最小有效距离 (m)
+    max_valid_distance: 5.0  # 最大有效距离 (m)
+
+    # 模拟模式
+    use_simulation: False  # 是否使用模拟模式
+    
+    # 超时设置
+    scan_timeout: 1.0  # 激光雷达数据超时时间 (s)
+
+    # 控制频率
+    control_frequency: 10.0
+
+# OCR节点参数
+ocr_node:
+  ros__parameters:
+    # 话题配置
+    rgb_topic: "/depth_cam/rgb/image_raw"  # RGB图像话题
+    service_name: "/pgi_agent/ocr"  # 服务名称
+    
+    # OCR配置
+    ocr_engine: "easyocr"  # OCR引擎 (easyocr, tesseract, simulation)
+    languages: ["en", "ch_sim"]  # 识别语言
+    confidence_threshold: 0.5  # 置信度阈值
+    
+    # 预处理参数
+    preprocess_enabled: True  # 是否启用预处理
+    resize_factor: 2.0  # 缩放因子
+    denoise: True  # 是否降噪
+    adaptive_threshold: True  # 是否自适应阈值
+    
+    # ROI参数
+    roi_enabled: False  # 是否启用ROI
+    roi_x: 0.3  # ROI x起始位置 (比例)
+    roi_y: 0.3  # ROI y起始位置 (比例)
+    roi_width: 0.4  # ROI宽度 (比例)
+    roi_height: 0.4  # ROI高度 (比例)
+    
+    # Tesseract配置
+    tesseract_path: ""  # Tesseract路径
+    
+    # 性能参数
+    gpu: True  # 是否使用GPU
+    batch_size: 1  # 批处理大小
+    max_text_length: 1000  # 最大文本长度
+
+    # 模拟模式
+    use_simulation: False  # 是否使用模拟模式
+
+    # 控制频率
+    control_frequency: 10.0
+
+# 智能体桥接节点参数
+agent_bridge_node:
+  ros__parameters:
+    # 服务配置
+    services:
+      - "/pgi_agent/move"
+      - "/pgi_agent/yolo_detect"
+      - "/pgi_agent/vlm_detect"
+      - "/pgi_agent/track"
+      - "/pgi_agent/check_obstacle"
+      - "/pgi_agent/ocr"
+    
+    # 话题配置
+    status_topic: "/pgi_agent/status"
+    command_topic: "/pgi_agent/command"
+    
+    # 性能参数
+    max_concurrent_requests: 3  # 最大并发请求数
+    request_timeout: 60  # 请求超时时间 (s)
+    
+    # 日志配置
+    log_level: "INFO"
+    log_file: "/tmp/pgi_agent_bridge.log"
+
+# 通用参数
+global:
+  ros__parameters:
+    # 帧率配置
+    camera_fps: 30
+    lidar_hz: 10
+    control_hz: 20
+    
+    # 坐标变换
+    base_frame: "base_link"
+    camera_frame: "depth_cam_link"
+    lidar_frame: "laser"
+    
+    # 网络配置
+    use_sim_time: False
+    qos_depth: 10
+    
+    # 调试配置
+    enable_visualization: True
+    save_debug_images: False
+    debug_image_path: "/tmp/pgi_agent_debug"

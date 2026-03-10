@@ -19,6 +19,7 @@ import json
 from threading import Lock
 import os
 from enum import Enum
+import yaml
 
 # 尝试导入API客户端
 try:
@@ -37,6 +38,26 @@ class VLMProvider(Enum):
     OPENAI = "openai"
     LOCAL = "local"
     SIMULATION = "simulation"
+    
+    
+def load_config_with_env(config_path):
+    with open(config_path, 'r') as f:
+        config = f.read()
+    
+    # 替换环境变量
+    for key, value in os.environ.items():
+        placeholder = f"${{{key}}}"
+        if placeholder in config:
+            config = config.replace(placeholder, value)
+    
+    return yaml.safe_load(config)    
+
+try:
+    with open(r"config/tools_param.yaml", 'r', encoding='utf-8') as file:
+        config = load_config_with_env(r"config/tools_param.yaml")
+    print(f"成功加载配置文件: {r'config/tools_param.yaml'}")
+except FileNotFoundError:
+    print(f"错误: 文件 {r'config/tools_param.yaml'} 不存在")
 
 
 class VLMNode(Node):
@@ -45,13 +66,15 @@ class VLMNode(Node):
     def __init__(self):
         super().__init__('vlm_node')
         
+        vlm_params = config.get("vlm_detect_node", {}).get("ros__parameters", {})
+        
         # 声明参数
         self.declare_parameters(
             namespace='',
             parameters=[
                 ('provider', 'qwen'),
-                ('model', 'qwen-vl-max'),
-                ('api_key', ''),
+                ('model', vlm_params.get("model", "qwen-vl-max")),
+                ('api_key', vlm_params.get("api_key", "")),
                 ('base_url', ''),
                 ('camera_topic', '/depth_cam/rgb/image_raw'),
                 ('service_name', '/pgi_agent/vlm_detect'),
@@ -222,12 +245,12 @@ class VLMNode(Node):
             analysis_text = api_response.choices[0].message.content
             
             # 提取结构化信息
-            structured_result = self._parse_vlm_response(analysis_text)
-            structured_result['description'] = analysis_text
+            # structured_result = self._parse_vlm_response(analysis_text)
+            # structured_result['description'] = analysis_text
             
             self.get_logger().info(f"API调用成功，耗时: {time_since_last:.2f}s")
             
-            return structured_result
+            return analysis_text
             
         except Exception as e:
             self.get_logger().error(f"API调用失败: {e}")
@@ -320,10 +343,8 @@ class VLMNode(Node):
         """构建VLM提示词"""
         prompt = """你是一个电力巡检机器人，请分析当前场景：
 1. 描述场景中的主要物体和设备
-2. 识别电力设备类型和状态
-3. 注意安全相关元素（警告标志、安全设备等）
-4. 评估现场安全状况
-5. 提供巡检建议
+2. 如果有设备，识别电力设备类型和状态
+3. 提供巡检建议
 
 请用中文回答，结构清晰。"""
         

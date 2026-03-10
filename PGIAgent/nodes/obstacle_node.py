@@ -15,6 +15,28 @@ import math
 import time
 from threading import Lock
 from enum import Enum
+import yaml
+import os
+
+def load_config_with_env(config_path):
+    with open(config_path, 'r') as f:
+        config = f.read()
+    
+    # 替换环境变量
+    for key, value in os.environ.items():
+        placeholder = f"${{{key}}}"
+        if placeholder in config:
+            config = config.replace(placeholder, value)
+    
+    return yaml.safe_load(config)    
+
+try:
+    with open(r"config/tools_param.yaml", 'r', encoding='utf-8') as file:
+        config = load_config_with_env(r"config/tools_param.yaml")
+    print(f"成功加载配置文件: {r'config/tools_param.yaml'}")
+except FileNotFoundError:
+    print(f"错误: 文件 {r'config/tools_param.yaml'} 不存在")
+    
 
 
 class SafetyLevel(Enum):
@@ -31,17 +53,19 @@ class ObstacleNode(Node):
     def __init__(self):
         super().__init__('obstacle_node')
         
+        obs_params = config.get("obstacle_check_node", {}).get("ros__parameters", {})
+        
         # 声明参数
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('lidar_topic', '/scan'),
-                ('service_name', '/pgi_agent/check_obstacle'),
-                ('safety_distance', 0.5),  # 安全距离（米）
-                ('warning_distance', 1.0),  # 警告距离
-                ('danger_distance', 0.3),   # 危险距离
-                ('critical_distance', 0.2), # 临界距离
-                ('angle_resolution', 45),    # 扇区角度分辨率（度）- 改为45度8个扇区
+                ('lidar_topic', obs_params.get("scan_topic", "/scan")),
+                ('service_name', obs_params.get("service_name", "/pgi_agent/check_obstacle")),
+                ('safety_distance', obs_params.get("min_safe_distance", 0.5)),  # 安全距离（米）
+                ('warning_distance', obs_params.get("warning_distance", 0.4)),  # 警告距离
+                ('danger_distance', obs_params.get("danger_distance", 0.3)),   # 危险距离
+                ('critical_distance', obs_params.get("critical_distance", 0.2)), # 临界距离
+                ('angle_resolution', obs_params.get("angle_resolution", 45)),    # 扇区角度分辨率（度）- 改为45度8个扇区
                 ('front_sector', 60),       # 前方扇区角度
                 ('min_valid_distance', 0.1), # 最小有效距离
                 ('max_valid_distance', 5.0), # 最大有效距离
@@ -176,7 +200,9 @@ class ObstacleNode(Node):
                 # 返回默认安全值
                 response.safe_direction = 0.0
                 response.min_distance = self.max_valid_distance
-                response.safe_sectors = [True] * self.num_sectors
+                # 返回默认的扇区信息（8个扇区，都标记为有障碍物以确保安全）
+                response.sector_ranges = self._generate_sector_range_strings()
+                response.has_obstacle = [True] * self.num_sectors
                 return response
             
             # 提取数据
@@ -193,20 +219,18 @@ class ObstacleNode(Node):
             response.message = analysis_result['message']
             response.safe_direction = analysis_result['safe_direction']  # 已经是相对角度
             response.min_distance = analysis_result['min_distance']
-            response.safety_level = analysis_result['safety_level']
-            response.obstacle_count = analysis_result['obstacle_count']
-            
-            # 确保safe_sectors是布尔列表
-            if isinstance(analysis_result['safe_sectors'], list):
-                response.safe_sectors = analysis_result['safe_sectors']
-            else:
-                response.safe_sectors = [True] * self.num_sectors
+            response.sector_ranges = analysis_result['sector_ranges']
+            response.has_obstacle = analysis_result['has_obstacle']
             
             self.get_logger().info(
-                f"障碍物分析: {response.safety_level}, "
-                f"最小距离: {response.min_distance:.2f}m, "
+                f"障碍物分析: 最小距离: {response.min_distance:.2f}m, "
                 f"安全方向: {response.safe_direction:.1f}°"
             )
+            
+            # 记录扇区信息
+            for i, (sector_range, has_obs) in enumerate(zip(response.sector_ranges, response.has_obstacle)):
+                status = "有障碍物" if has_obs else "无障碍物"
+                self.get_logger().debug(f"扇区 {i}: {sector_range} - {status}")
             
         except Exception as e:
             self.get_logger().error(f"障碍物分析过程中发生错误: {e}")
@@ -214,7 +238,8 @@ class ObstacleNode(Node):
             response.message = f"分析失败: {str(e)}"
             response.safe_direction = 0.0
             response.min_distance = self.max_valid_distance
-            response.safe_sectors = [True] * self.num_sectors
+            response.sector_ranges = self._generate_sector_range_strings()
+            response.has_obstacle = [True] * self.num_sectors
         
         return response
     
@@ -241,6 +266,18 @@ class ObstacleNode(Node):
         """
         return math.radians(relative_deg)
     
+    def _generate_sector_range_strings(self):
+        """生成扇区角度范围字符串列表"""
+        sector_ranges = []
+        for i in range(self.num_sectors):
+            start_angle = i * self.angle_resolution
+            end_angle = (i + 1) * self.angle_resolution
+            # 转换为相对角度（机器人坐标系：前为0度）
+            start_rel = start_angle - 180
+            end_rel = end_angle - 180
+            sector_ranges.append(f"{start_rel:.0f}-{end_rel:.0f}°")
+        return sector_ranges
+    
     def _analyze_obstacles(self, ranges, angles):
         """分析障碍物"""
         # 过滤无效数据
@@ -249,20 +286,18 @@ class ObstacleNode(Node):
         valid_angles = angles[valid_mask]
         
         if len(valid_ranges) == 0:
+            # 没有有效数据时，返回默认值
+            sector_ranges = self._generate_sector_range_strings()
             return {
                 'message': "未检测到有效障碍物数据",
                 'safe_direction': 0.0,
                 'min_distance': self.max_valid_distance,
-                'safety_level': SafetyLevel.SAFE.value,
-                'obstacle_count': 0,
-                'safe_sectors': [True] * self.num_sectors
+                'sector_ranges': sector_ranges,
+                'has_obstacle': [True] * self.num_sectors  # 安全起见，假设所有扇区都有障碍物
             }
         
         # 计算最小距离
         min_distance = np.min(valid_ranges)
-        
-        # 确定安全级别
-        safety_level = self._determine_safety_level(min_distance)
         
         # 分析各个扇区
         sector_analysis = self._analyze_sectors(ranges, angles)
@@ -270,24 +305,24 @@ class ObstacleNode(Node):
         # 找到最安全的方向（返回相对角度）
         safe_direction = self._find_safest_direction(sector_analysis)
         
-        # 统计障碍物数量
-        obstacle_count = np.sum(valid_ranges < self.safety_distance)
+        # 生成扇区角度范围字符串
+        sector_ranges = self._generate_sector_range_strings()
         
-        # 生成安全扇区掩码（布尔列表）
-        safe_sectors = self._generate_sector_mask(sector_analysis)
+        # 生成障碍物状态列表
+        has_obstacle = []
+        for sector in sector_analysis:
+            # 如果有障碍物距离小于安全距离，则认为该扇区有障碍物
+            has_obstacle.append(sector['min_distance'] < self.safety_distance)
         
         # 生成消息
-        message = self._generate_analysis_message(
-            safety_level, min_distance, obstacle_count, safe_direction
-        )
+        message = self._generate_analysis_message(min_distance, safe_direction, has_obstacle)
         
         return {
             'message': message,
             'safe_direction': safe_direction,  # 已经是相对角度
             'min_distance': float(min_distance),
-            'safety_level': safety_level.value,
-            'obstacle_count': int(obstacle_count),
-            'safe_sectors': safe_sectors
+            'sector_ranges': sector_ranges,
+            'has_obstacle': has_obstacle
         }
     
     def _determine_safety_level(self, min_distance):
@@ -342,7 +377,8 @@ class ObstacleNode(Node):
             center_angle_abs = (start_angle_abs + end_angle_abs) / 2
             center_angle_rel = self._absolute_to_relative_angle(math.radians(center_angle_abs - 180))
             
-            sector_analysis.append({
+            sector_analysis.append(
+                {
                 'sector_id': i,
                 'start_angle_abs': start_angle_abs,
                 'end_angle_abs': end_angle_abs,
@@ -350,7 +386,8 @@ class ObstacleNode(Node):
                 'min_distance': min_dist,
                 'avg_distance': avg_dist,
                 'is_safe': min_dist >= self.safety_distance
-            })
+            }
+                )
         
         return sector_analysis
     
@@ -394,25 +431,44 @@ class ObstacleNode(Node):
         
         return safe_mask
     
-    def _generate_analysis_message(self, safety_level, min_distance, obstacle_count, safe_direction):
+    def _generate_analysis_message(self, min_distance, safe_direction, has_obstacle):
         """生成分析消息"""
-        messages = {
-            SafetyLevel.SAFE: f"前方安全，最小距离 {min_distance:.2f}m",
-            SafetyLevel.WARNING: f"前方有障碍物警告，最小距离 {min_distance:.2f}m",
-            SafetyLevel.DANGER: f"前方有障碍物危险，最小距离 {min_distance:.2f}m",
-            SafetyLevel.CRITICAL: f"前方有障碍物临界，最小距离 {min_distance:.2f}m，建议立即停止"
-        }
+        # 统计有障碍物的扇区数量
+        obstacle_sectors = sum(has_obstacle)
+        total_sectors = len(has_obstacle)
         
-        base_message = messages.get(safety_level, "未知安全状态")
-        
-        if obstacle_count > 0:
-            obstacle_info = f"，检测到 {obstacle_count} 个障碍物"
+        # 确定安全级别
+        if min_distance < self.critical_distance:
+            safety_level = "临界"
+        elif min_distance < self.danger_distance:
+            safety_level = "危险"
+        elif min_distance < self.warning_distance:
+            safety_level = "警告"
         else:
-            obstacle_info = ""
+            safety_level = "安全"
         
-        direction_info = f"，建议朝向 {safe_direction:.1f}° 方向移动"
+        # 生成基础消息
+        if safety_level == "安全":
+            base_message = f"前方{safety_level}，最小距离 {min_distance:.2f}m"
+        else:
+            base_message = f"前方有障碍物{safety_level}，最小距离 {min_distance:.2f}m"
         
-        return base_message + obstacle_info + direction_info
+        # 添加扇区信息
+        if obstacle_sectors > 0:
+            sector_info = f"，{obstacle_sectors}/{total_sectors}个扇区有障碍物"
+        else:
+            sector_info = f"，所有{total_sectors}个扇区都安全"
+        
+        # 添加方向建议
+        if abs(safe_direction) < 10:  # 方向接近正前方
+            direction_info = f"，建议继续直行"
+        else:
+            if safe_direction > 0:
+                direction_info = f"，建议向左{safe_direction:.0f}°方向移动"
+            else:
+                direction_info = f"，建议向右{abs(safe_direction):.0f}°方向移动"
+        
+        return base_message + sector_info + direction_info
     
     def destroy_node(self):
         """清理资源"""

@@ -4,6 +4,7 @@
 提供 move(velocity, angle, seconds) 工具功能
 """
 
+import os
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup # 并发执行多个回调，允许多个回调同时运行
@@ -12,7 +13,27 @@ from std_srvs.srv import Trigger
 from PGIAgent.srv import MoveCommand  # 修正导入
 import math
 from threading import Lock
+import yaml
 
+
+def load_config_with_env(config_path):
+    with open(config_path, 'r') as f:
+        config = f.read()
+    
+    # 替换环境变量
+    for key, value in os.environ.items():
+        placeholder = f"${{{key}}}"
+        if placeholder in config:
+            config = config.replace(placeholder, value)
+    
+    return yaml.safe_load(config)    
+
+try:
+    with open(r"config/tools_param.yaml", 'r', encoding='utf-8') as file:
+        config = load_config_with_env(r"config/tools_param.yaml")
+    print(f"成功加载配置文件: {r'config/tools_param.yaml'}")
+except FileNotFoundError:
+    print(f"错误: 文件 {r'config/tools_param.yaml'} 不存在")
 
 class MoveNode(Node):
     """
@@ -25,18 +46,20 @@ class MoveNode(Node):
     def __init__(self):
         super().__init__('move_node')
         
+        move_params = config.get('move_node', {}).get("ros__parameters", {})
+        
         # 声明参数
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('default_velocity', 0.2),
-                ('default_seconds', 2.0),
-                ('angular_scaling', 0.5),
-                ('cmd_vel_topic', '/cmd_vel'),
-                ('service_name', '/pgi_agent/move'),
-                ('max_velocity', 0.5),
-                ('emergency_stop_distance', 0.2),
-                ('control_frequency', 10.0),  # 控制频率
+                ('default_velocity', move_params.get("default_velocity", 0.2)),
+                ('default_seconds', move_params.get("default_seconds", 2.0)),
+                ('angular_scaling', move_params.get("angular_scaling", 0.5)),
+                ('cmd_vel_topic', move_params.get("cmd_vel_topic", "/cmd_vel")),
+                ('service_name', move_params.get("service_name", "/pgi_agent/move")),
+                ('max_velocity', move_params.get("max_velocity", 0.5)),
+                ('emergency_stop_distance', move_params.get("emergency_stop_distance", 0.2)),
+                ('control_frequency', move_params.get("control_frequency", 10.0)),  # 控制频率
             ]
         )
         

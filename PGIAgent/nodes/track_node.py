@@ -20,6 +20,7 @@ import math
 from threading import Lock, Thread, Event
 from enum import Enum
 import os
+import yaml
 
 # 尝试导入YOLO
 try:
@@ -37,6 +38,26 @@ class TrackingState(Enum):
     TRACKING = "tracking"
     LOST = "lost"
     COMPLETED = "completed"
+    
+    
+def load_config_with_env(config_path):
+    with open(config_path, 'r') as f:
+        config = f.read()
+    
+    # 替换环境变量
+    for key, value in os.environ.items():
+        placeholder = f"${{{key}}}"
+        if placeholder in config:
+            config = config.replace(placeholder, value)
+    
+    return yaml.safe_load(config)    
+
+try:
+    with open(r"config/tools_param.yaml", 'r', encoding='utf-8') as file:
+        config = load_config_with_env(r"config/tools_param.yaml")
+    print(f"成功加载配置文件: {r'config/tools_param.yaml'}")
+except FileNotFoundError:
+    print(f"错误: 文件 {r'config/tools_param.yaml'} 不存在")
 
 
 class TrackNode(Node):
@@ -45,27 +66,30 @@ class TrackNode(Node):
     def __init__(self):
         super().__init__('track_node')
         
-        # 声明参数
+        # 从配置文件读取参数
+        track_params = config.get("track_node", {}).get("ros__parameters", {})
+        
+        # 声明参数（使用yaml中的值作为默认值）
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('model_path', 'yolo11n.pt'),
-                ('default_target', 'person'),
-                ('target_distance', 1.2),  # 目标距离（米）
-                ('distance_tolerance', 0.2),  # 距离容差
-                ('max_tracking_time', 60.0),  # 最大追踪时间（秒）
-                ('search_timeout', 10.0),  # 搜索超时时间
-                ('camera_topic', '/depth_cam/rgb/image_raw'),
-                ('depth_topic', '/depth_cam/depth/image_raw'),
-                ('cmd_vel_topic', '/cmd_vel'),
-                ('service_name', '/pgi_agent/track'),
-                ('kp_linear', 0.5),
-                ('kd_linear', 0.1),
-                ('kp_angular', 0.8),
-                ('kd_angular', 0.2),
-                ('max_linear_vel', 0.3),
-                ('max_angular_vel', 0.5),
-                ('use_simulation', False),
+                ('model_path', track_params.get("model_path", "yolo11n.pt")),
+                ('default_target', track_params.get("default_target", "person")),
+                ('target_distance', track_params.get("tracking_distance", 1.2)),
+                ('distance_tolerance', track_params.get("distance_tolerance", 0.2)),
+                ('max_tracking_time', track_params.get("max_tracking_time", 60.0)),
+                ('search_timeout', track_params.get("search_timeout", 10.0)),
+                ('camera_topic', track_params.get("rgb_topic", "/depth_cam/rgb/image_raw")),
+                ('depth_topic', track_params.get("depth_topic", "/depth_cam/depth/image_raw")),
+                ('cmd_vel_topic', track_params.get("cmd_vel_topic", "/cmd_vel")),
+                ('service_name', track_params.get("service_name", "/pgi_agent/track")),
+                ('kp_linear', track_params.get("kp_distance", 0.5)),
+                ('kd_linear', track_params.get("kd_distance", 0.1)),
+                ('kp_angular', track_params.get("kp_angle", 0.8)),
+                ('kd_angular', track_params.get("kd_angle", 0.2)),
+                ('max_linear_vel', track_params.get("max_linear_vel", 0.3)),
+                ('max_angular_vel', track_params.get("max_angular_vel", 0.5)),
+                ('use_simulation', track_params.get("use_simulation", False)),
             ]
         )
         
