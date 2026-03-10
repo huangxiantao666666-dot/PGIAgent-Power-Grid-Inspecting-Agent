@@ -10,6 +10,8 @@
 4. [六个工具详解](#六个工具详解)
 5. [状态管理](#状态管理)
 6. [配置管理](#配置管理)
+7. [使用示例](#使用示例)
+8. [同步与异步版本](#同步与异步版本)
 
 ---
 
@@ -1037,6 +1039,96 @@ class AgentNode(Node):
         response.message = result['final_answer']
         return response
 ```
+
+---
+
+## 同步与异步版本
+
+### 8.1 双版本设计
+
+PGIAgent 同时支持同步和异步执行，主要区别如下：
+
+| 特性 | 同步版本 | 异步版本 |
+|------|----------|----------|
+| 编译图 | `self.app` | `self.async_app` |
+| 节点函数 | `_xxx_node()` | `_xxx_node_async()` |
+| LLM调用 | `self.llm.invoke()` | `await self.async_llm.ainvoke()` |
+| 工具调用 | `tool_func(**kwargs)` | `await tool_func.ainvoke(kwargs)` |
+| 执行入口 | `agent.run()` | `agent.run_async()` |
+| 流式输出 | `agent.stream()` | `agent.stream_async()` |
+
+### 8.2 工作流构建
+
+同步和异步工作流使用相同的图结构，但节点函数不同：
+
+```python
+def _build_workflow_base(self, is_async: bool = False) -> StateGraph:
+    workflow = StateGraph(PlanActReflectState)
+    
+    if is_async:
+        # 异步节点
+        workflow.add_node("think", self._think_node_async)
+        workflow.add_node("plan", self._plan_node_async)
+        workflow.add_node("act", self._act_node_async)
+        workflow.add_node("reflect", self._reflect_node_async)
+        workflow.add_node("examine", self._examine_node_async)
+        workflow.add_node("end", self._end_node_async)
+    else:
+        # 同步节点
+        workflow.add_node("think", self._think_node)
+        workflow.add_node("plan", self._plan_node)
+        workflow.add_node("act", self._act_node)
+        workflow.add_node("reflect", self._reflect_node)
+        workflow.add_node("examine", self._examine_node)
+        workflow.add_node("end", self._end_node)
+    
+    # 条件边相同
+    workflow.add_conditional_edges("act", self._should_continue_after_act, {...})
+    workflow.add_conditional_edges("reflect", self._should_replan_after_reflect, {...})
+    workflow.add_conditional_edges("examine", self._should_continue_after_examine, {...})
+    
+    return workflow
+```
+
+### 8.3 异步节点示例
+
+```python
+async def _act_node_async(self, state: PlanActReflectState) -> Dict[str, Any]:
+    """Act节点（异步）：使用ReAct方式执行当前步骤"""
+    # ... 准备 prompt ...
+    
+    async_llm_with_tools = self._get_async_llm_with_tools()
+    
+    for round_num in range(max_react_rounds):
+        # 异步LLM调用
+        response = await async_llm_with_tools.ainvoke(step_messages)
+        
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            for tool_call in response.tool_calls:
+                tool_name = tool_call['name']
+                tool_input = tool_call.get('args', {})
+                
+                # 获取异步工具函数
+                tool_func = self.async_tool_functions.get(tool_name)
+                if tool_func:
+                    # 异步工具调用
+                    tool_result = await tool_func.ainvoke(tool_input)
+    
+    return {...}
+```
+
+### 8.4 使用场景
+
+**同步版本适用场景：**
+- 命令行脚本
+- 简单的单次任务执行
+- 调试和开发
+
+**异步版本适用场景：**
+- ROS2 节点集成
+- Web 服务
+- 需要并发处理多个任务
+- 与其他异步系统集成
 
 ---
 

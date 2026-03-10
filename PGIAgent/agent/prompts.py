@@ -50,11 +50,12 @@ def get_system_prompt() -> str:
 请根据用户的任务要求，制定合理的执行计划，并安全地完成任务。"""
 
 
-def get_planning_prompt(task: str) -> str:
+def get_planning_prompt(task: str, thinking: str) -> str:
     """获取规划提示词"""
     return f"""请为以下电网巡检任务制定详细的执行计划：
 
 任务：{task}
+先前进行的思考：{thinking}
 
 请按照以下步骤制定计划：
 1. 分析任务需求，确定需要使用的工具
@@ -72,7 +73,7 @@ def get_planning_prompt(task: str) -> str:
 5. 使用OCR读取设备标签
 6. 完成巡检任务
 
-现在请为上述任务制定计划："""
+做计划的时候不要调用工具，现在请为上述任务制定计划："""
 
 
 def get_reflection_prompt(state: AgentState) -> str:
@@ -295,7 +296,7 @@ def get_think_prompt(task: str) -> str:
 3. 有什么安全注意事项？
 4. 预期的完成标准是什么？
 
-请用中文详细思考并回答："""
+思考的时候不要调用工具，请用中文详细思考并回答："""
 
 
 def get_plan_prompt(task: str, think_context: str = "") -> str:
@@ -330,11 +331,9 @@ def get_act_prompt(
     execution_history: str = ""
 ) -> str:
     """获取Act节点ReAct执行提示词"""
-    return f"""请使用ReAct (Reasoning + Acting)方式执行当前步骤：
+    return f"""你是一个步骤执行器，需要协助完成以下任务：
 
 当前任务：{task}
-
-当前步骤 ({step_index + 1}/{total_steps})：{current_step}
 
 已完成的步骤：
 {past_steps if past_steps else "无"}
@@ -342,11 +341,9 @@ def get_act_prompt(
 执行历史：
 {execution_history if execution_history else "无"}
 
-请按以下格式思考和行动：
-Thought: 思考需要做什么
-Action: 要使用的工具名称（如move, yolo_detect, VLM_detect, track, check_obstacle, ocr或"完成"）
-Action Input: 工具参数（JSON格式），如无参数则写{{}}
-Observation: 执行结果（由系统填充）
+当前步骤 ({step_index + 1}/{total_steps})：{current_step}
+
+请你在行动前先思考需要做什么，然后再调用工具。
 
 注意：
 - 每一步只能执行一个动作
@@ -438,3 +435,101 @@ def get_summary_prompt(task: str, past_steps: str = "", examine_result: str = ""
 5. 建议或后续行动（如有）
 
 请用中文详细回复："""
+
+
+def get_react_prompt(
+    task: str,
+    current_step: str,
+    step_index: int,
+    total_steps: int,
+    past_steps: str = "",
+    execution_history: str = ""
+) -> str:
+    """获取Act节点ReAct执行提示词"""
+    return f"""请使用ReAct (Reasoning + Acting)方式执行当前步骤：
+
+当前任务：{task}
+
+当前步骤 ({step_index + 1}/{total_steps})：{current_step}
+
+已完成的步骤：
+{past_steps if past_steps else "无"}
+
+执行历史：
+{execution_history if execution_history else "无"}
+
+请按以下格式思考和行动：
+Thought: 思考需要做什么
+Action: 要使用的工具名称（如move, yolo_detect, VLM_detect, track, check_obstacle, ocr或"完成"）
+Action Input: 工具参数（JSON格式），如无参数则写{{}}
+Observation: 执行结果（由系统填充）
+
+注意：
+- 每一步只能执行一个动作
+- 如果当前步骤完成，请输出 "Action: 完成"
+- 移动前先检查障碍物
+- 保持安全距离
+
+现在开始执行："""
+
+
+def get_par_reflect_prompt(
+    task: str,
+    current_step: str,
+    step_status: str,
+    past_steps: str = ""
+) -> str:
+    """获取Reflect节点提示词"""
+    return f"""请反思当前的执行过程：
+
+任务：{task}
+
+当前步骤：{current_step}
+执行状态：{step_status}
+
+已完成步骤：
+{past_steps if past_steps else "无"}
+
+请回答以下问题：
+1. 当前步骤执行是否顺利？结果如何？
+2. 工具调用是否都成功？
+3. 是否需要调整执行计划？
+
+请选择下一步行动：
+- 如果只需要修正当前步的小问题，继续执行下一步
+- 如果需要大幅调整计划，选择重新规划
+
+请用以下格式回复：
+反思结果：[你的反思]
+行动选择：[修正当前步 / 重新规划]"""
+
+
+def get_par_examine_prompt(
+    task: str,
+    plan: List[str],
+    current_index: int,
+    past_steps: str = ""
+) -> str:
+    """获取Examine节点提示词"""
+    plan_str = "\n".join([f"{i+1}. {step}" for i, step in enumerate(plan)])
+    return f"""请检查当前任务是否完成：
+
+原始任务：{task}
+
+执行计划：
+{plan_str}
+
+已执行步骤：{current_index}/{len(plan)}
+
+已完成步骤详情：
+{past_steps if past_steps else "无"}
+
+请检查：
+1. 原始任务的所有要求是否都满足了？
+2. 执行计划中的所有步骤是否都完成了？
+3. 是否有遗漏的子任务？
+
+请用以下格式回复：
+检查结果：[任务完成 / 任务未完成]
+原因：[如果未完成，说明原因]
+建议：[如果未完成，建议如何处理]"""

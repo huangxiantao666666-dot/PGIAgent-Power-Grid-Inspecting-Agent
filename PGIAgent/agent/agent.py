@@ -9,9 +9,11 @@ Plan-Act-Reflect Agent 工作流定义
 
 工作流结构：
 think -> plan -> act -> (reflect | act) -> examine -> (reflect | end)
+
+其中 Act 节点使用 ReactAgent 子图来实现 ReAct 循环
 """
 
-from typing import Dict, Any, List, Optional, TypedDict, Annotated, Literal, Union, Iterator, AsyncIterator
+from typing import Dict, Any, List, Optional, TypedDict, Annotated, Literal, Union, Iterator, AsyncIterator, Callable
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage, AnyMessage
@@ -31,10 +33,10 @@ from .state import (
 from .tools import ToolManager, create_tool_functions, create_async_tool_functions
 from .prompts import (
     get_system_prompt, 
-    get_think_prompt, get_plan_prompt, get_act_prompt,
-    get_reflect_prompt as get_par_reflect_prompt,
-    get_examine_prompt, get_summary_prompt
+    get_think_prompt, get_plan_prompt,
+    get_reflect_prompt, get_examine_prompt, get_summary_prompt
 )
+from .react_agent import ReactAgent, create_react_agent
 
 load_dotenv()
 
@@ -83,23 +85,6 @@ def parse_plan_from_text(plan_text: str) -> List[str]:
     return steps
 
 
-def format_step_messages_for_llm(messages: List[AnyMessage]) -> str:
-    """将步骤消息格式化为可读文本"""
-    if not messages:
-        return "无执行历史"
-    
-    formatted = []
-    for msg in messages:
-        if hasattr(msg, 'content'):
-            role = msg.type if hasattr(msg, 'type') else 'unknown'
-            content = msg.content
-            if len(content) > 500:
-                content = content[:500] + "..."
-            formatted.append(f"{role}: {content}")
-    
-    return "\n".join(formatted)
-
-
 def format_past_steps(past_steps: List[Dict]) -> str:
     """格式化已完成步骤"""
     if not past_steps:
@@ -123,26 +108,28 @@ class PlanActReflectAgent:
         
         # 初始化工具管理器
         self.tool_manager = ToolManager(self.config, ros_node)
-        self.tool_functions = create_tool_functions(self.tool_manager)
-        self.async_tool_functions = create_async_tool_functions(self.tool_manager)
         
-        # 初始化LLM
+        # 创建 ReactAgent 子图（用于 Act 节点）
+        self.react_agent = create_react_agent(self.config, self.tool_manager)
+        
+        # 初始化LLM（用于 Think, Plan, Reflect, Examine, End 节点）
         self.llm = self._init_llm()
         
-        # 绑定工具到LLM
-        self.llm_with_tools = self.llm.bind_tools(
-            list(self.tool_functions.values()),
-            tool_choice="auto"
-        )
+        # 初始化异步LLM
+        self.async_llm = self._init_async_llm()
         
-        # 构建工作流
+        # 构建工作流（同步和异步）
         self.workflow = self._build_workflow()
+        self.async_workflow = self._build_async_workflow()
+        
+        # 编译工作流
         self.app = self.workflow.compile()
+        self.async_app = self.async_workflow.compile()
         
         print(f"✅ Plan-Act-Reflect Agent 初始化完成 (provider: {self.config.llm_provider})")
     
     def _init_llm(self):
-        """初始化大模型"""
+        """初始化同步LLM"""
         if self.config.llm_provider == "deepseek":
             api_key = os.getenv("DEEPSEEK_API_KEY", "")
             return ChatOpenAI(
@@ -157,7 +144,49 @@ class PlanActReflectAgent:
             try:
                 from langchain_community.chat_models.tongyi import ChatTongyi
                 return ChatTongyi(
-                    model=self.config.llm_model,
+                    model=self.config.llm_model or "qwen-plus",
+                    api_key=api_key,
+                    temperature=self.config.llm_temperature,
+                    max_tokens=self.config.llm_max_tokens
+                )
+            except ImportError:
+                return ChatOpenAI(
+                    model="qwen-turbo",
+                    api_key=api_key,
+                    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                    temperature=self.config.llm_temperature,
+                    max_tokens=self.config.llm_max_tokens
+                )
+        elif self.config.llm_provider == "local":
+            return ChatOllama(
+                model=self.config.llm_model or "qwen2.5:7b",
+                temperature=0.8,
+                num_ctx=4096
+            )
+        else:
+            return self._create_mock_llm()
+    
+    def _init_async_llm(self):
+        """初始化异步LLM"""
+        return self._create_llm()
+    
+    def _create_llm(self):
+        """创建LLM实例（同步/异步共用）"""
+        if self.config.llm_provider == "deepseek":
+            api_key = os.getenv("DEEPSEEK_API_KEY", "")
+            return ChatOpenAI(
+                model=self.config.llm_model,
+                api_key=api_key,
+                base_url="https://api.deepseek.com",
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens
+            )
+        elif self.config.llm_provider == "qwen":
+            api_key = os.getenv("QWEN_API_KEY", "")
+            try:
+                from langchain_community.chat_models.tongyi import ChatTongyi
+                return ChatTongyi(
+                    model=self.config.llm_model or "qwen-plus",
                     api_key=api_key,
                     temperature=self.config.llm_temperature,
                     max_tokens=self.config.llm_max_tokens
@@ -202,6 +231,9 @@ class PlanActReflectAgent:
                 
                 return ChatResult(generations=[ChatGeneration(message=AIMessage(content=response))])
             
+            async def _agenerate(self, messages, stop=None, **kwargs):
+                return self._generate(messages, stop, **kwargs)
+            
             @property
             def _llm_type(self):
                 return "mock"
@@ -209,16 +241,33 @@ class PlanActReflectAgent:
         return MockLLM()
     
     def _build_workflow(self) -> StateGraph:
-        """构建LangGraph工作流"""
+        """构建同步工作流"""
+        return self._build_workflow_base(is_async=False)
+    
+    def _build_async_workflow(self) -> StateGraph:
+        """构建异步工作流"""
+        return self._build_workflow_base(is_async=True)
+    
+    def _build_workflow_base(self, is_async: bool = False) -> StateGraph:
+        """构建工作流（同步/异步通用）"""
         workflow = StateGraph(PlanActReflectState)
         
-        # 添加节点
-        workflow.add_node("think", self._think_node)
-        workflow.add_node("plan", self._plan_node)
-        workflow.add_node("act", self._act_node)
-        workflow.add_node("reflect", self._reflect_node)
-        workflow.add_node("examine", self._examine_node)
-        workflow.add_node("end", self._end_node)
+        if is_async:
+            # 异步节点
+            workflow.add_node("think", self._think_node_async)
+            workflow.add_node("plan", self._plan_node_async)
+            workflow.add_node("act", self._act_node_async)
+            workflow.add_node("reflect", self._reflect_node_async)
+            workflow.add_node("examine", self._examine_node_async)
+            workflow.add_node("end", self._end_node_async)
+        else:
+            # 同步节点
+            workflow.add_node("think", self._think_node)
+            workflow.add_node("plan", self._plan_node)
+            workflow.add_node("act", self._act_node)
+            workflow.add_node("reflect", self._reflect_node)
+            workflow.add_node("examine", self._examine_node)
+            workflow.add_node("end", self._end_node)
         
         workflow.set_entry_point("think")
         workflow.add_edge("think", "plan")
@@ -245,7 +294,7 @@ class PlanActReflectAgent:
         
         return workflow
     
-    # ========== 节点实现 ==========
+    # ========== 同步节点实现 ==========
     
     def _think_node(self, state: PlanActReflectState) -> Dict[str, Any]:
         """Think节点：思考如何做用户任务"""
@@ -274,10 +323,9 @@ class PlanActReflectAgent:
         
         # 获取思考结果
         think_context = ""
-        for msg in state.get("messages", []):
-            if hasattr(msg, 'type') and msg.type == 'ai' and len(state.get("messages", [])) > 1:
-                think_context = msg.content
-                break
+        messages = state.get("messages", [])
+        if len(messages) > 1:
+            think_context = messages[-1].content
         
         plan_prompt = get_plan_prompt(task, think_context)
         
@@ -303,7 +351,7 @@ class PlanActReflectAgent:
         }
     
     def _act_node(self, state: PlanActReflectState) -> Dict[str, Any]:
-        """Act节点：使用ReAct方式执行当前步骤"""
+        """Act节点：调用 ReactAgent 子图执行当前步骤"""
         plan = state.get("plan", [])
         current_index = state.get("current_step_index", 0)
         
@@ -315,99 +363,32 @@ class PlanActReflectAgent:
         
         current_step = plan[current_index]
         
-        react_prompt = f"""请使用ReAct (Reasoning + Acting)方式执行当前步骤：
-
-当前任务：{state['task']}
-
-当前步骤 ({current_index + 1}/{len(plan)})：{current_step}
-
-已完成的步骤：
-{format_past_steps(state.get('past_steps', []))}
-
-执行历史：
-{format_step_messages_for_llm(state.get('step_messages', []))}
-
-请按以下格式思考和行动：
-Thought: 思考需要做什么
-Action: 要使用的工具名称（如move, yolo_detect, VLM_detect, track, check_obstacle, ocr或"完成"）
-Action Input: 工具参数（JSON格式），如无参数则写{{}}
-Observation: 执行结果（由系统填充）
-
-注意：
-- 每一步只能执行一个动作
-- 如果当前步骤完成，请输出 "Action: 完成"
-- 移动前先检查障碍物
-- 保持安全距离
-
-现在开始执行："""
+        # 调用 ReactAgent 子图来执行这个步骤
+        react_result = self.react_agent.run(
+            task=state["task"],
+            current_step=current_step,
+            step_index=current_index,
+            total_steps=len(plan),
+            max_rounds=3,
+            past_steps=format_past_steps(state.get('past_steps', []))
+        )
         
-        step_messages = list(state.get("step_messages", []))
-        step_messages.append(HumanMessage(content=react_prompt))
+        # 提取 ReAct 执行的消息
+        react_messages = react_result.get("messages", [])
         
-        max_react_rounds = 3
-        for round_num in range(max_react_rounds):
-            response = self.llm_with_tools.invoke(step_messages)
-            step_messages.append(response)
-            
-            if hasattr(response, 'tool_calls') and response.tool_calls:
-                for tool_call in response.tool_calls:
-                    tool_name = tool_call['name']
-                    tool_input = tool_call.get('args', {})
-                    
-                    if tool_name == "完成" or tool_input.get("完成", False):
-                        return {
-                            "step_messages": step_messages,
-                            "current_step_status": "success",
-                            "past_steps": state.get("past_steps", []) + [{
-                                "step": current_step,
-                                "result": "步骤执行成功",
-                                "status": "success"
-                            }],
-                            "current_step_index": current_index + 1,
-                            "iteration_count": state.get("iteration_count", 0) + 1
-                        }
-                    
-                    tool_func = self.tool_functions.get(tool_name)
-                    if tool_func:
-                        try:
-                            if isinstance(tool_input, dict):
-                                tool_result = tool_func(**tool_input)
-                            else:
-                                tool_result = tool_func()
-                            
-                            observation = f"\nObservation: {tool_result}\n"
-                            step_messages.append(HumanMessage(content=observation))
-                        except Exception as e:
-                            observation = f"\nObservation: 工具执行失败: {str(e)}\n"
-                            step_messages.append(HumanMessage(content=observation))
-                    else:
-                        observation = f"\nObservation: 未知工具: {tool_name}\n"
-                        step_messages.append(HumanMessage(content=observation))
-            else:
-                response_content = response.content.lower() if hasattr(response, 'content') else ""
-                if "完成" in response_content or "success" in response_content:
-                    return {
-                        "step_messages": step_messages,
-                        "current_step_status": "success",
-                        "past_steps": state.get("past_steps", []) + [{
-                            "step": current_step,
-                            "result": "步骤执行成功",
-                            "status": "success"
-                        }],
-                        "current_step_index": current_index + 1,
-                        "iteration_count": state.get("iteration_count", 0) + 1
-                    }
+        # 更新已完成步骤
+        new_past_steps = state.get("past_steps", []) + [{
+            "step": current_step,
+            "result": "步骤执行完成",
+            "status": "success" if react_result.get("success") else "failed"
+        }]
         
         return {
-            "step_messages": step_messages,
+            "step_messages": react_messages,
             "current_step_status": "success",
-            "past_steps": state.get("past_steps", []) + [{
-                "step": current_step,
-                "result": "步骤执行完成（达到最大轮数）",
-                "status": "success"
-            }],
+            "past_steps": new_past_steps,
             "current_step_index": current_index + 1,
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "iteration_count": state.get("iteration_count", 0) + react_result.get("iteration_count", 0)
         }
     
     def _reflect_node(self, state: PlanActReflectState) -> Dict[str, Any]:
@@ -415,28 +396,12 @@ Observation: 执行结果（由系统填充）
         current_step = state.get("plan", [])[state.get("current_step_index", 0) - 1] if state.get("current_step_index", 0) > 0 else "无"
         step_status = state.get("current_step_status", "pending")
         
-        reflect_prompt = f"""请反思当前的执行过程：
-
-任务：{state['task']}
-
-当前步骤：{current_step}
-执行状态：{step_status}
-
-已完成步骤：
-{format_past_steps(state.get('past_steps', []))}
-
-请回答以下问题：
-1. 当前步骤执行是否顺利？结果如何？
-2. 工具调用是否都成功？
-3. 是否需要调整执行计划？
-
-请选择下一步行动：
-- 如果只需要修正当前步的小问题，继续执行下一步
-- 如果需要大幅调整计划，选择重新规划
-
-请用以下格式回复：
-反思结果：[你的反思]
-行动选择：[修正当前步 / 重新规划]"""
+        reflect_prompt = get_reflect_prompt(
+            task=state['task'],
+            current_step=current_step,
+            step_status=step_status,
+            past_steps=format_past_steps(state.get('past_steps', []))
+        )
         
         messages = [
             SystemMessage(content=get_system_prompt()),
@@ -472,25 +437,12 @@ Observation: 执行结果（由系统填充）
         current_index = state.get("current_step_index", 0)
         past_steps = state.get("past_steps", [])
         
-        examine_prompt = f"""请检查当前任务是否完成：
-
-原始任务：{task}
-
-执行计划：{plan}
-已执行步骤：{current_index}/{len(plan)}
-
-已完成步骤详情：
-{format_past_steps(past_steps)}
-
-请检查：
-1. 原始任务的所有要求是否都满足了？
-2. 执行计划中的所有步骤是否都完成了？
-3. 是否有遗漏的子任务？
-
-请用以下格式回复：
-检查结果：[任务完成 / 任务未完成]
-原因：[如果未完成，说明原因]
-建议：[如果未完成，建议如何处理]"""
+        examine_prompt = get_examine_prompt(
+            task=task,
+            plan=plan,
+            current_index=current_index,
+            past_steps=format_past_steps(past_steps)
+        )
         
         messages = [
             SystemMessage(content=get_system_prompt()),
@@ -520,23 +472,11 @@ Observation: 执行结果（由系统填充）
         past_steps = state.get("past_steps", [])
         examine_result = state.get("examine_result", "")
         
-        summary_prompt = f"""请为以下任务生成最终总结：
-
-原始任务：{task}
-
-任务执行情况：
-{format_past_steps(past_steps)}
-
-检查结果：{examine_result}
-
-请生成最终的任务报告，包括：
-1. 任务概述
-2. 执行的主要步骤
-3. 检测到的物体/结果
-4. 任务完成状态
-5. 建议或后续行动（如有）
-
-请用中文详细回复："""
+        summary_prompt = get_summary_prompt(
+            task=task,
+            past_steps=format_past_steps(past_steps),
+            examine_result=examine_result
+        )
         
         messages = [
             SystemMessage(content=get_system_prompt()),
@@ -547,6 +487,206 @@ Observation: 执行结果（由系统填充）
             messages.append(msg)
         
         response = self.llm.invoke(messages)
+        final_answer = response.content
+        
+        return {
+            "final_answer": final_answer,
+            "messages": state.get("messages", []) + [AIMessage(content=final_answer)]
+        }
+    
+    # ========== 异步节点实现 ==========
+    
+    async def _think_node_async(self, state: PlanActReflectState) -> Dict[str, Any]:
+        """Think节点（异步）：思考如何做用户任务"""
+        task = state["task"]
+        think_prompt = get_think_prompt(task)
+        
+        messages = [
+            SystemMessage(content=get_system_prompt()),
+            HumanMessage(content=think_prompt)
+        ]
+        
+        response = await self.async_llm.ainvoke(messages)
+        
+        new_messages = list(state.get("messages", []))
+        new_messages.append(HumanMessage(content=think_prompt))
+        new_messages.append(AIMessage(content=response.content))
+        
+        return {
+            "messages": new_messages,
+            "iteration_count": state.get("iteration_count", 0)
+        }
+    
+    async def _plan_node_async(self, state: PlanActReflectState) -> Dict[str, Any]:
+        """Plan节点（异步）：制定执行计划"""
+        task = state["task"]
+        
+        # 获取思考结果
+        think_context = ""
+        messages = state.get("messages", [])
+        if len(messages) > 1:
+            think_context = messages[-1].content
+        
+        plan_prompt = get_plan_prompt(task, think_context)
+        
+        messages = [
+            SystemMessage(content=get_system_prompt()),
+            HumanMessage(content=plan_prompt)
+        ]
+        
+        response = await self.async_llm.ainvoke(messages)
+        plan_text = response.content
+        plan_steps = parse_plan_from_text(plan_text)
+        
+        new_messages = list(state.get("messages", []))
+        new_messages.append(HumanMessage(content=plan_prompt))
+        new_messages.append(AIMessage(content=plan_text))
+        
+        return {
+            "plan": plan_steps,
+            "current_step_index": 0,
+            "messages": new_messages,
+            "step_messages": [],
+            "past_steps": []
+        }
+    
+    async def _act_node_async(self, state: PlanActReflectState) -> Dict[str, Any]:
+        """Act节点（异步）：调用 ReactAgent 子图执行当前步骤"""
+        plan = state.get("plan", [])
+        current_index = state.get("current_step_index", 0)
+        
+        if not plan or current_index >= len(plan):
+            return {
+                "current_step_status": "completed",
+                "task_completed": True
+            }
+        
+        current_step = plan[current_index]
+        
+        # 调用 ReactAgent 子图（异步版本）
+        react_result = await self.react_agent.run_async(
+            task=state["task"],
+            current_step=current_step,
+            step_index=current_index,
+            total_steps=len(plan),
+            max_rounds=3,
+            past_steps=format_past_steps(state.get('past_steps', []))
+        )
+        
+        # 提取 ReAct 执行的消息
+        react_messages = react_result.get("messages", [])
+        
+        # 更新已完成步骤
+        new_past_steps = state.get("past_steps", []) + [{
+            "step": current_step,
+            "result": "步骤执行完成",
+            "status": "success" if react_result.get("success") else "failed"
+        }]
+        
+        return {
+            "step_messages": react_messages,
+            "current_step_status": "success",
+            "past_steps": new_past_steps,
+            "current_step_index": current_index + 1,
+            "iteration_count": state.get("iteration_count", 0) + react_result.get("iteration_count", 0)
+        }
+    
+    async def _reflect_node_async(self, state: PlanActReflectState) -> Dict[str, Any]:
+        """Reflect节点（异步）：反思执行过程"""
+        current_step = state.get("plan", [])[state.get("current_step_index", 0) - 1] if state.get("current_step_index", 0) > 0 else "无"
+        step_status = state.get("current_step_status", "pending")
+        
+        reflect_prompt = get_reflect_prompt(
+            task=state['task'],
+            current_step=current_step,
+            step_status=step_status,
+            past_steps=format_past_steps(state.get('past_steps', []))
+        )
+        
+        messages = [
+            SystemMessage(content=get_system_prompt()),
+            HumanMessage(content=reflect_prompt)
+        ]
+        
+        for msg in state.get("messages", [])[-4:]:
+            messages.append(msg)
+        
+        response = await self.async_llm.ainvoke(messages)
+        reflection = response.content
+        reflect_type = "modify_current"
+        
+        if "重新规划" in reflection or "重新制定" in reflection:
+            reflect_type = "replan"
+        
+        new_messages = list(state.get("messages", []))
+        new_messages.append(HumanMessage(content=reflect_prompt))
+        new_messages.append(AIMessage(content=reflection))
+        
+        return {
+            "reflection": reflection,
+            "reflect_type": reflect_type,
+            "messages": new_messages,
+            "step_messages": [],
+            "current_step_status": "pending"
+        }
+    
+    async def _examine_node_async(self, state: PlanActReflectState) -> Dict[str, Any]:
+        """Examine节点（异步）：检查任务是否完成"""
+        task = state["task"]
+        plan = state.get("plan", [])
+        current_index = state.get("current_step_index", 0)
+        past_steps = state.get("past_steps", [])
+        
+        examine_prompt = get_examine_prompt(
+            task=task,
+            plan=plan,
+            current_index=current_index,
+            past_steps=format_past_steps(past_steps)
+        )
+        
+        messages = [
+            SystemMessage(content=get_system_prompt()),
+            HumanMessage(content=examine_prompt)
+        ]
+        
+        for msg in state.get("messages", [])[-4:]:
+            messages.append(msg)
+        
+        response = await self.async_llm.ainvoke(messages)
+        examine_result = response.content
+        task_completed = "完成" in examine_result and "未完成" not in examine_result
+        
+        new_messages = list(state.get("messages", []))
+        new_messages.append(HumanMessage(content=examine_prompt))
+        new_messages.append(AIMessage(content=examine_result))
+        
+        return {
+            "examine_result": examine_result,
+            "task_completed": task_completed,
+            "messages": new_messages
+        }
+    
+    async def _end_node_async(self, state: PlanActReflectState) -> Dict[str, Any]:
+        """End节点（异步）：生成最终答案"""
+        task = state["task"]
+        past_steps = state.get("past_steps", [])
+        examine_result = state.get("examine_result", "")
+        
+        summary_prompt = get_summary_prompt(
+            task=task,
+            past_steps=format_past_steps(past_steps),
+            examine_result=examine_result
+        )
+        
+        messages = [
+            SystemMessage(content=get_system_prompt()),
+            HumanMessage(content=summary_prompt)
+        ]
+        
+        for msg in state.get("messages", []):
+            messages.append(msg)
+        
+        response = await self.async_llm.ainvoke(messages)
         final_answer = response.content
         
         return {
@@ -627,7 +767,7 @@ Observation: 执行结果（由系统填充）
                 "messages": []
             }
     
-    # ========== 流式输出接口 ==========
+    # ========== 流式输出接口（同步） ==========
     
     def stream(self, task: str, max_iterations: Optional[int] = None) -> Iterator[Dict[str, Any]]:
         """
@@ -661,6 +801,8 @@ Observation: 执行结果（由系统填充）
         except Exception as e:
             yield {"node": "error", "type": "error", "content": f"执行异常: {str(e)}"}
     
+    # ========== 异步执行接口 ==========
+    
     async def run_async(self, task: str, max_iterations: Optional[int] = None) -> Dict[str, Any]:
         """运行Agent工作流（异步接口）"""
         if max_iterations:
@@ -670,7 +812,7 @@ Observation: 执行结果（由系统填充）
         
         try:
             # 异步调用
-            final_state = await self.app.ainvoke(initial_state)
+            final_state = await self.async_app.ainvoke(initial_state)
             
             return {
                 "success": final_state.get("task_completed", False),
@@ -708,7 +850,7 @@ Observation: 执行结果（由系统填充）
         
         try:
             # 异步流式调用
-            async for event in self.app.astream(initial_state, stream_mode="message"):
+            async for event in self.async_app.astream(initial_state, stream_mode="message"):
                 if isinstance(event, tuple):
                     node_name, messages = event
                     if messages and len(messages) > 0:
@@ -736,16 +878,22 @@ def create_plan_act_reflect_agent(
 
 
 def run_task(task: str, config: Optional[AgentConfig] = None, max_iterations: int = 20) -> Dict[str, Any]:
-    """运行任务的便捷接口"""
+    """运行任务的便捷接口（同步）"""
     agent = create_plan_act_reflect_agent(config)
     return agent.run(task, max_iterations)
+
+
+async def run_task_async(task: str, config: Optional[AgentConfig] = None, max_iterations: int = 20) -> Dict[str, Any]:
+    """运行任务的便捷接口（异步）"""
+    agent = create_plan_act_reflect_agent(config)
+    return await agent.run_async(task, max_iterations)
 
 
 # ========== 测试代码 ==========
 
 def test_agent():
-    """测试Plan-Act-Reflect Agent"""
-    print("=== 测试 Plan-Act-Reflect Agent ===\n")
+    """测试Plan-Act-Reflect Agent（同步版本）"""
+    print("=== 测试 Plan-Act-Reflect Agent (同步) ===\n")
     
     agent = create_plan_act_reflect_agent()
     
