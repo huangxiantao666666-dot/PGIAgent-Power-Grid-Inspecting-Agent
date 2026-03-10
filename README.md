@@ -24,8 +24,10 @@ PGIAgent/
 ├── config/                  # Configuration Files
 │   ├── agent_config.yaml    # Agent configuration
 │   ├── model_config.yaml    # Model configuration
-│   └── ros_params.yaml      # ROS parameters
+│   ├── ros_params.yaml      # ROS parameters
+│   └── tools_param.yaml     # ROS2 service tools parameters
 ├── docs/                    # Documentation
+|   ├── architecture.md      # whole thinking
 │   └── jetson_setup.md      # Jetson deployment guide
 ├── launch/                  # ROS2 Launch Files
 │   ├── agent.launch.py      # Launch all nodes + agent
@@ -33,8 +35,9 @@ PGIAgent/
 │   └── tools.launch.py      # Launch tool nodes only
 ├── PGIAgent/                # Python Package
 │   ├── agent/               # Agent Core
-│   │   ├── agent_graph.py   # LangGraph workflow
+│   │   ├── agent.py         # Think-Plan-ReAct-Reflect-Examine
 │   │   ├── prompts.py       # Prompt templates
+│   │   ├── react_agent.py   # ReAct agent
 │   │   ├── state.py         # State management
 │   │   ├── tools.py         # Tool function encapsulation
 │   │   └── __init__.py
