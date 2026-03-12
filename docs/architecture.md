@@ -15,6 +15,7 @@ PGIAgent is a complete intelligent agent system that integrates large language m
 - **🚗 Safe Navigation**: LiDAR obstacle detection, PID control tracking, safe distance maintenance
 - **🔧 Tool-based Architecture**: All capabilities encapsulated as callable tool functions
 - **⚡ Jetson Optimization**: TensorRT acceleration and performance optimization for Jetson Orin Nano
+- **🔛 Decoupling of Tools and Agent Design**: The tool and agent workflows can be debugged separately for easier inspection.
 
 
 ## System Architecture
