@@ -152,8 +152,10 @@ ocr_node:
     rgb_topic: "/depth_cam/rgb/image_raw"  # RGB图像话题
     service_name: "/pgi_agent/ocr"  # 服务名称
     
-    # OCR配置
-    ocr_engine: "easyocr"  # OCR引擎 (easyocr, tesseract, simulation)
+    # OCR引擎选择
+    ocr_engine: "easyocr"  # OCR引擎 (easyocr, tesseract, vlm, simulation)
+    
+    # EasyOCR配置
     languages: ["en", "ch_sim"]  # 识别语言
     confidence_threshold: 0.5  # 置信度阈值
     
@@ -172,6 +174,22 @@ ocr_node:
     
     # Tesseract配置
     tesseract_path: ""  # Tesseract路径
+    
+    # VLM OCR配置 (当 ocr_engine 为 "vlm" 时使用)
+    vlm_provider: "qwen"  # VLM提供商 (qwen, deepseek, openai, local)
+    vlm_api_key: "${QWEN_API_KEY}"  # API密钥
+    vlm_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"  # API基础URL
+    vlm_model: "qwen-vl-flash-2026-01-22"  # VLM模型名称
+    
+    # VLM OCR提示词
+    vlm_ocr_prompt: "请识别图中所有的文字内容，包括仪表读数、标签、设备编号、安全警示等电力设备相关文字。请直接列出识别到的文字内容。"
+    
+    # VLM请求参数
+    vlm_max_tokens: 1000  # 最大token数
+    vlm_temperature: 0.1  # 温度参数
+    vlm_timeout: 30  # 请求超时时间 (s)
+    vlm_image_quality: "high"  # 图像质量 (high, low)
+    vlm_max_image_size: 1024  # 最大图像尺寸
     
     # 性能参数
     gpu: True  # 是否使用GPU

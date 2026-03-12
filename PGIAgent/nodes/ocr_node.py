@@ -14,6 +14,8 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import time
+import base64
+import re
 from threading import Lock
 import os
 from collections import deque
@@ -35,6 +37,15 @@ try:
 except ImportError:
     TESSERACT_AVAILABLE = False
     print("警告: pytesseract或PIL未安装")
+
+# 尝试导入API客户端
+try:
+    import openai
+    import httpx
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    print("警告: openai或httpx未安装，VLM OCR将不可用")
     
 
 def load_config_with_env(config_path):
@@ -89,6 +100,17 @@ class OCRNode(Node):
                 ('batch_size', ocr_params.get('batch_size', 1)),
                 ('max_text_length', ocr_params.get('max_text_length', 1000)),
                 ('use_simulation', ocr_params.get('use_simulation', False)),
+                # VLM OCR 参数
+                ('vlm_provider', ocr_params.get('vlm_provider', 'qwen')),
+                ('vlm_api_key', ocr_params.get('vlm_api_key', '')),
+                ('vlm_base_url', ocr_params.get('vlm_base_url', 'https://dashscope.aliyuncs.com/compatible-mode/v1')),
+                ('vlm_model', ocr_params.get('vlm_model', 'qwen-vl-flash-2026-01-22')),
+                ('vlm_ocr_prompt', ocr_params.get('vlm_ocr_prompt', '请识别图中所有的文字内容，包括仪表读数、标签、设备编号、安全警示等电力设备相关文字。请直接列出识别到的文字内容。')),
+                ('vlm_max_tokens', ocr_params.get('vlm_max_tokens', 1000)),
+                ('vlm_temperature', ocr_params.get('vlm_temperature', 0.1)),
+                ('vlm_timeout', ocr_params.get('vlm_timeout', 30)),
+                ('vlm_image_quality', ocr_params.get('vlm_image_quality', 'high')),
+                ('vlm_max_image_size', ocr_params.get('vlm_max_image_size', 1024)),
             ]
         )
         
@@ -113,12 +135,27 @@ class OCRNode(Node):
         self.batch_size = self.get_parameter('batch_size').value
         self.max_text_length = self.get_parameter('max_text_length').value
         
+        # VLM OCR 参数
+        self.vlm_provider = self.get_parameter('vlm_provider').value
+        self.vlm_api_key = self.get_parameter('vlm_api_key').value
+        self.vlm_base_url = self.get_parameter('vlm_base_url').value
+        self.vlm_model = self.get_parameter('vlm_model').value
+        self.vlm_ocr_prompt = self.get_parameter('vlm_ocr_prompt').value
+        self.vlm_max_tokens = self.get_parameter('vlm_max_tokens').value
+        self.vlm_temperature = self.get_parameter('vlm_temperature').value
+        self.vlm_timeout = self.get_parameter('vlm_timeout').value
+        self.vlm_image_quality = self.get_parameter('vlm_image_quality').value
+        self.vlm_max_image_size = self.get_parameter('vlm_max_image_size').value
+        
         # 检查OCR引擎可用性
         if self.ocr_engine == 'easyocr' and not EASYOCR_AVAILABLE:
             self.get_logger().warning("easyocr不可用，切换到模拟模式")
             self.use_simulation = True
         elif self.ocr_engine == 'tesseract' and not TESSERACT_AVAILABLE:
             self.get_logger().warning("tesseract不可用，切换到模拟模式")
+            self.use_simulation = True
+        elif self.ocr_engine == 'vlm' and not OPENAI_AVAILABLE:
+            self.get_logger().warning("openai/httpx不可用，切换到模拟模式")
             self.use_simulation = True
             
         
@@ -196,6 +233,18 @@ class OCRNode(Node):
                     self.tesseract_config += ' -l eng'
                 
                 self.get_logger().info("tesseract初始化成功")
+                
+            elif self.ocr_engine == 'vlm':
+                # 初始化VLM客户端
+                self.get_logger().info(f"初始化VLM OCR，提供商: {self.vlm_provider}")
+                import openai
+                import httpx
+                self.vlm_client = openai.OpenAI(
+                    api_key=self.vlm_api_key,
+                    base_url=self.vlm_base_url,
+                    timeout=httpx.Timeout(self.vlm_timeout)
+                )
+                self.get_logger().info(f"VLM OCR初始化成功，模型: {self.vlm_model}")
                 
         except Exception as e:
             self.get_logger().error(f"OCR引擎初始化失败: {e}")
@@ -294,8 +343,128 @@ class OCRNode(Node):
             return self._perform_easyocr(roi_frame, frame.shape)
         elif self.ocr_engine == 'tesseract':
             return self._perform_tesseract(roi_frame, frame.shape)
+        elif self.ocr_engine == 'vlm':
+            return self._perform_vlm_ocr(frame)
         else:
             return self._simulate_ocr(frame)
+    
+    def _perform_vlm_ocr(self, frame):
+        """使用VLM进行OCR识别"""
+        # 预处理图像
+        processed_frame = self._preprocess_vlm_image(frame)
+        
+        # 编码图像为base64
+        image_base64 = self._encode_image_to_base64(processed_frame)
+        
+        # 构建消息
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": self.vlm_ocr_prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}",
+                            "detail": self.vlm_image_quality
+                        }
+                    }
+                ]
+            }
+        ]
+        
+        try:
+            # 调用VLM API
+            api_response = self.vlm_client.chat.completions.create(
+                model=self.vlm_model,
+                messages=messages,
+                max_tokens=self.vlm_max_tokens,
+                temperature=self.vlm_temperature
+            )
+            
+            # 解析响应
+            ocr_text = api_response.choices[0].message.content
+            
+            self.get_logger().info(f"VLM OCR识别完成: {ocr_text[:100]}...")
+            
+            # 解析VLM响应，提取文本和位置信息
+            return self._parse_vlm_ocr_response(ocr_text, frame.shape)
+            
+        except Exception as e:
+            self.get_logger().error(f"VLM OCR调用失败: {e}")
+            return {
+                'texts': [],
+                'confidences': [],
+                'positions': []
+            }
+    
+    def _preprocess_vlm_image(self, frame):
+        """VLM图像预处理"""
+        h, w = frame.shape[:2]
+        
+        # 调整图像大小
+        if max(h, w) > self.vlm_max_image_size:
+            scale = self.vlm_max_image_size / max(h, w)
+            new_h = int(h * scale)
+            new_w = int(w * scale)
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        
+        # 根据质量设置调整
+        if self.vlm_image_quality == 'low':
+            frame = cv2.resize(frame, (512, 512), interpolation=cv2.INTER_AREA)
+        
+        return frame
+    
+    def _encode_image_to_base64(self, frame):
+        """将图像编码为base64"""
+        # 编码为JPEG
+        success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not success:
+            raise ValueError("图像编码失败")
+        
+        # 转换为base64
+        image_base64 = base64.b64encode(buffer).decode('utf-8')
+        return image_base64
+    
+    def _parse_vlm_ocr_response(self, ocr_text, original_shape):
+        """解析VLM OCR响应，提取文本列表"""
+        texts = []
+        confidences = []
+        positions = []
+        
+        h, w = original_shape[:2]
+        
+        # VLM返回的是文本描述，需要按行或按项目符号分割
+        # 常见格式：
+        # 1. 文本1
+        # 2. 文本2
+        # 或者：
+        # 文本1, 文本2, 文本3
+        
+        # 尝试按行分割
+        lines = ocr_text.replace('\n', ' ').split('.')
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 移除可能的编号（1., 2., - 等）
+            line = re.sub(r'^[0-9]+[\.\)]\s*', '', line)
+            line = re.sub(r'^[-•]\s*', '', line)
+            
+            if len(line) > 1:  # 过滤单字符
+                texts.append(line[:self.max_text_length])
+                # VLM不返回置信度，使用默认值
+                confidences.append(0.8)
+                # VLM不返回位置信息，使用默认位置
+                positions.append("中间")
+        
+        return {
+            'texts': texts,
+            'confidences': confidences,
+            'positions': positions
+        }
     
     def _preprocess_image(self, frame):
         """预处理图像"""
@@ -547,35 +716,23 @@ class OCRNode(Node):
             if not text or text.isspace():
                 continue
             
-            # 检查是否包含电力设备关键词
-            contains_keyword = any(
-                keyword in text for keyword in self.power_keywords
-            )
+            # # 检查是否包含电力设备关键词
+            # contains_keyword = any(
+            #     keyword in text for keyword in self.power_keywords
+            # )
             
-            # 检查是否包含数字和单位（电力设备常见）
-            has_number = any(char.isdigit() for char in text)
-            has_unit = any(unit in text for unit in ['kV', 'V', 'A', 'W', 'Hz', 'kVA', 'kW'])
+            # # 检查是否包含数字和单位（电力设备常见）
+            # has_number = any(char.isdigit() for char in text)
+            # has_unit = any(unit in text for unit in ['kV', 'V', 'A', 'W', 'Hz', 'kVA', 'kW'])
             
-            # 保留条件：
-            # 1. 包含电力关键词
-            # 2. 或包含数字和单位（可能是仪表读数）
-            # 3. 或置信度非常高（>0.9）
-            if (contains_keyword or 
-                (has_number and has_unit) or 
-                confidence >= 0.9):
+            # # 保留条件：
+            # # 1. 包含电力关键词
+            # # 2. 或包含数字和单位（可能是仪表读数）
+            # # 3. 或置信度非常高（>0.9）
                 
-                filtered_texts.append(text)
-                filtered_confidences.append(confidence)
-                filtered_positions.append(position)
-                
-                self.get_logger().debug(
-                    f"保留文本: '{text}' (置信度: {confidence:.2f}), "
-                    f"位置: {position}, 关键词: {contains_keyword}"
-                )
-            else:
-                self.get_logger().debug(
-                    f"过滤文本: '{text}' (置信度: {confidence:.2f}) - 无关内容"
-                )
+            filtered_texts.append(text)
+            filtered_confidences.append(confidence)
+            filtered_positions.append(position)
         
         return {
             'texts': filtered_texts,
