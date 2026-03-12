@@ -1,1223 +1,532 @@
-# PGIAgent 项目技术原理详解
+# PGIAgent - Power Grid Inspection Agent
 
-本文档详细介绍 PGIAgent 电网巡检智能体系统的技术原理，包括 Agent 工作流设计和六个工具的实现细节。
+A ROS2 and LangGraph-based intelligent agent system for JetAuto Mecanum Wheel Robot (equipped with Jetson Orin Nano) providing autonomous power grid inspection capabilities.
 
-## 目录
+## Project Overview
 
-1. [系统概述](#系统概述)
-2. [Agent 工作流](#agent-工作流)
-3. [工具系统架构](#工具系统架构)
-4. [六个工具详解](#六个工具详解)
-5. [状态管理](#状态管理)
-6. [配置管理](#配置管理)
-7. [使用示例](#使用示例)
-8. [同步与异步版本](#同步与异步版本)
+PGIAgent is a complete intelligent agent system that integrates large language models (LLMs) with robot hardware capabilities to achieve autonomous power grid inspection tasks. The system adopts a modular design supporting multiple vision models, motion control, and environmental perception tools.
 
----
+![The Project](../images/project.png)
 
-## 系统概述
+### Core Features
 
-PGIAgent 是一个基于 ROS2 和 LangGraph 的电网巡检智能体系统，采用 **Plan-Act-Reflect**（计划-执行-反思）工作流模式。
+- **🤖 Intelligent Decision Making**: LangGraph-based workflow engine supporting planning, execution, reflection cycles
+- **👁️ Multimodal Perception**: Integrated YOLOv11 object detection, Vision Language Model (VLM) scene understanding, OCR text recognition
+- **🚗 Safe Navigation**: LiDAR obstacle detection, PID control tracking, safe distance maintenance
+- **🔧 Tool-based Architecture**: All capabilities encapsulated as callable tool functions
+- **⚡ Jetson Optimization**: TensorRT acceleration and performance optimization for Jetson Orin Nano
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        PGIAgent 系统架构                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐    │
-│   │   用户任务    │───▶│ Plan-Act-    │───▶│   执行结果    │    │
-│   │  （自然语言） │     │   Reflect    │     │   (任务报告)  │    │
-│   └──────────────┘     │   Workflow   │     └──────────────┘    │
-│                        └──────────────┘                         │
-│                               │                                 │
-│                               ▼                                 │
-│                        ┌──────────────┐                         │
-│                        │  ToolManager │                         │
-│                        │  (工具管理器)  │                        │
-│                        └──────────────┘                         │
-│                               │                                 │
-│         ┌─────────┬───────────┼───────────┬─────────┐           │
-│         ▼         ▼           ▼           ▼         ▼           │
-│   ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐        │
-│   │  move  │ │  yolo  │ │  VLM   │ │ track  │ │ check  │        │
-│   │        │ │ _detect│ │ _detect│ │        │ │obstacle│        │
-│   └────────┘ └────────┘ └────────┘ └────────┘ └────────┘        │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
 
-### 核心技术栈
-
-| 层次 | 技术 |
-|------|------|
-| 工作流引擎 | LangGraph |
-| 大模型 | DeepSeek / Qwen / 本地模型 |
-| 通信框架 | ROS2 (rclpy) |
-| 工具封装 | LangChain @tool |
-| 视觉模型 | YOLOv11 + Qwen-VL |
-| 感知硬件 | 深度相机 + 激光雷达 |
-
----
-
-## Agent 工作流
-
-### 2.1 Plan-Act-Reflect 模式
-
-PGIAgent 采用 **Plan-Act-Reflect** 模式，这是对 ReAct (Reasoning + Acting) 模式的扩展：
+## System Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                    Plan-Act-Reflect 工作流                        │
-└──────────────────────────────────────────────────────────────────┘
-
-  ┌───────┐    ┌───────┐    ┌───────┐    ┌─────────┐    ┌───────┐
-  │ Think │──▶│ Plan  │──▶│  Act   │──▶│ Examine  │──▶│  End  │
-  └───────┘    └───────┘    └───────┘    └────┬────┘    └───────┘
-                                              │
-                                              ▼
-                                        ┌───────────┐
-                                        │  Reflect  │
-                                        └─────┬─────┘
-                                              │
-                          ┌───────────────────┴───────────────────┐
-                          ▼                                       ▼
-                    ┌───────────┐                           ┌───────────┐
-                    │   重新规划 │                          │  继续执行   │
-                    └─────┬─────┘                           └─────┬─────┘
-                          │                                       │
-                          └───────────────┬───────────────────────┘
-                                          ▼
-                                    ┌───────────┐
-                                    │   Act     │
-                                    └───────────┘
+PGIAgent/
+├── config/                  # Configuration Files
+│   ├── agent_config.yaml    # Agent configuration
+│   ├── model_config.yaml    # Model configuration
+│   ├── ros_params.yaml      # ROS parameters
+│   └── tools_param.yaml     # ROS2 service tools parameters
+├── docs/                    # Documentation
+|   ├── architecture.md      # whole thinking
+│   └── jetson_setup.md      # Jetson deployment guide
+├── launch/                  # ROS2 Launch Files
+│   ├── agent.launch.py      # Launch all nodes + agent
+│   ├── agent_only.launch.py # Launch agent only
+│   └── tools.launch.py      # Launch tool nodes only
+├── PGIAgent/                # Python Package
+│   ├── agent/               # Agent Core
+│   │   ├── agent.py         # Think-Plan-ReAct-Reflect-Examine
+│   │   ├── prompts.py       # Prompt templates
+│   │   ├── react_agent.py   # ReAct agent
+│   │   ├── state.py         # State management
+│   │   ├── tools.py         # Tool function encapsulation
+│   │   └── __init__.py
+│   ├── nodes/               # ROS2 Nodes
+│   │   ├── detection_node.py    # Object detection node
+│   │   ├── move_node.py         # Motion control node
+│   │   ├── obstacle_node.py     # Obstacle detection node
+│   │   ├── ocr_node.py          # OCR node
+│   │   ├── track_node.py        # Target tracking node
+│   │   └── vlm_node.py          # Vision language model node
+│   ├── scripts/             # Utility Scripts
+│   │   ├── test_agent.py    # Test script
+│   │   ├── test_launch.py   # Launch test script
+│   │   └── __init__.py
+│   └── srv/                 # ROS2 Service Definitions
+│       ├── CheckObstacle.srv
+│       ├── MoveCommand.srv
+│       ├── OCR.srv
+│       ├── Track.srv
+│       ├── VLMDetect.srv
+│       └── YOLODetect.srv
+├── resource/                # ROS2 Resource Files
+│   └── PGIAgent             # Package marker file
+├── scripts/                 # System Scripts
+│   └── install_deps.sh      # Dependency installation script
+├── .env.example             # Environment variables example
+├── .gitignore              # Git ignore file
+├── LICENSE                  # MIT License
+├── package.xml              # ROS2 package definition (format 3)
+├── README.md               # English documentation
+├── READMEcn.md             # Chinese documentation
+├── requirements.txt        # Python dependencies
+└── setup.py               # Python package configuration (ament_python)
 ```
 
-### 2.2 节点详解
+## Think-Plan-ReAct-Reflect-Examine Workflow
 
-#### Think 节点 - 任务分析
+### 1. Overview
 
-**职责**：理解用户任务，分析任务需求
+![workflow](../images/workflow.png)
 
-**输入**：
-- 用户任务描述
+When a user provides a task, the model first enters a **Thinking Node** to consider how to accomplish the task and which tools might need to be invoked.
 
-**处理流程**：
-1. 调用 LLM 分析任务
-2. 确定任务类型（巡检、追踪、检查等）
-3. 识别所需工具
-4. 考虑安全因素
+The model then moves to the **Planning Node**, where it outputs a formatted list of steps:
+- **Step 1**: [Description of the first step]
+- **Step 2**: [Description of the second step]
+- **Step 3**: [Description of the third step]
 
-**使用提示词**：
-```python
-def get_think_prompt(task: str) -> str:
-    return f"""你是一个电网巡检机器人。请仔细思考如何完成以下任务：
+After parsing each step, the model proceeds to an **Act Node** for that step. This node is handled by a new ReAct agent, which completes the step using a **Think-Act-Observation** loop. If the step is completed successfully, the process continues to the next step. If the step fails, the model enters a **Reflect Node** to consider whether to revise the current step or propose a new plan starting from that step.
 
-任务：{task}
+Once all steps are successfully completed, the model enters an **Examine Node** to evaluate whether the task has been fully accomplished. If the task has not been well completed, the model re-enters the **Reflect Node**; otherwise, it proceeds to the **Summarize Node** to provide a task summary.
 
-请分析：
-1. 这个任务需要哪些步骤？
-2. 需要使用哪些工具？
-3. 有什么安全注意事项？
-4. 预期的完成标准是什么？
-
-请用中文详细思考并回答："""
-```
-
-**输出**：
-- 任务分析结果（添加到 messages）
-
----
-
-#### Plan 节点 - 制定计划
-
-**职责**：基于任务分析，制定具体的执行计划
-
-**输入**：
-- 用户任务
-- Think 节点的分析结果
-
-**处理流程**：
-1. 解析 Think 节点输出
-2. 生成步骤列表
-3. 每个步骤关联工具
-4. 考虑安全检查点
-
-**使用提示词**：
-```python
-def get_plan_prompt(task: str, think_context: str = "") -> str:
-    return f"""基于以下任务和思考结果，请制定详细的执行计划：
-
-任务：{task}
-
-之前的思考：
-{think_context}
-
-请制定具体的执行计划，格式如下：
-1. 第一步要做什么
-2. 第二步要做什么
-3. 第三步要做什么
-...
-
-每个步骤应该：
-- 明确指定要使用的工具（如需要）
-- 描述具体的操作内容
-- 考虑安全因素
-
-请用中文回复，直接列出步骤编号和内容："""
-```
-
-**输出**：
-- 执行计划步骤列表 (`List[str]`)
-- 当前步骤索引 (`current_step_index`)
-
----
-
-#### Act 节点 - 执行步骤
-
-**职责**：使用 ReAct 模式执行当前计划步骤
-
-**输入**：
-- 当前步骤
-- 已完成步骤列表
-- 执行历史
-
-**ReAct 循环**：
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    ReAct 执行循环                            │
-└─────────────────────────────────────────────────────────────┘
-
-   ┌─────────────┐
-   │  生成思考   │  Thought: 需要调用YOLO检测前方物体
-   └──────┬──────┘
-          ▼
-   ┌─────────────┐
-   │  选择工具   │  Action: yolo_detect
-   └──────┬──────┘
-          ▼
-   ┌─────────────┐
-   │  调用工具   │  Action Input: {"threshold": 0.8}
-   └──────┬──────┘
-          ▼
-   ┌─────────────┐
-   │  获取结果   │  Observation: 检测到3个物体
-   └──────┬──────┘
-          ▼
-   ┌─────────────┐
-   │  判断是否   │  是否需要继续？
-   │  继续      │  是 → 继续循环 / 否 → 退出
-   └─────────────┘
-```
-
-**最大循环次数**：3 轮（防止无限循环）
-
-**使用提示词**：
-```python
-def get_act_prompt(
-    task: str,
-    current_step: str,
-    step_index: int,
-    total_steps: int,
-    past_steps: str = "",
-    execution_history: str = ""
-) -> str:
-    return f"""请使用ReAct (Reasoning + Acting)方式执行当前步骤：
-
-当前任务：{task}
-
-当前步骤 ({step_index + 1}/{total_steps})：{current_step}
-
-已完成的步骤：
-{past_steps}
-
-执行历史：
-{execution_history}
-
-请按以下格式思考和行动：
-Thought: 思考需要做什么
-Action: 要使用的工具名称
-Action Input: 工具参数（JSON格式）
-Observation: 执行结果（由系统填充）
-
-注意：
-- 每一步只能执行一个动作
-- 如果当前步骤完成，请输出 "Action: 完成"
-- 移动前先检查障碍物
-- 保持安全距离
-
-现在开始执行："""
-```
-
-**输出**：
-- 步骤执行状态（成功/失败）
-- 更新已完成步骤列表
-- 推进到下一个步骤
-
----
-
-#### Reflect 节点 - 反思
-
-**职责**：反思执行过程，决定是否需要调整计划
-
-**输入**：
-- 当前步骤及状态
-- 已完成步骤
-- 工具调用历史
-
-**决策**：
-- **修正当前步**：小问题，继续执行
-- **重新规划**：需要大幅调整，返回 Plan 节点
-
-**使用提示词**：
-```python
-def get_reflect_prompt(
-    task: str,
-    current_step: str,
-    step_status: str,
-    past_steps: str = ""
-) -> str:
-    return f"""请反思当前的执行过程：
-
-任务：{task}
-
-当前步骤：{current_step}
-执行状态：{step_status}
-
-已完成步骤：
-{past_steps}
-
-请回答以下问题：
-1. 当前步骤执行是否顺利？结果如何？
-2. 工具调用是否都成功？
-3. 是否需要调整执行计划？
-
-请选择下一步行动：
-- 如果只需要修正当前步的小问题，继续执行下一步
-- 如果需要大幅调整计划，选择重新规划
-
-请用以下格式回复：
-反思结果：[你的反思]
-行动选择：[修正当前步 / 重新规划]"""
-```
-
----
-
-#### Examine 节点 - 检查完成
-
-**职责**：评估任务是否完成
-
-**输入**：
-- 原始任务
-- 执行计划
-- 已完成步骤
-
-**决策**：
-- **任务完成** → End 节点
-- **任务未完成** → Reflect 节点 或 End（达到最大迭代）
-
-**使用提示词**：
-```python
-def get_examine_prompt(
-    task: str,
-    plan: List[str],
-    current_index: int,
-    past_steps: str = ""
-) -> str:
-    return f"""请检查当前任务是否完成：
-
-原始任务：{task}
-
-执行计划：{plan}
-已执行步骤：{current_index}/{len(plan)}
-
-已完成步骤详情：
-{past_steps}
-
-请检查：
-1. 原始任务的所有要求是否都满足了？
-2. 执行计划中的所有步骤是否都完成了？
-3. 是否有遗漏的子任务？
-
-请用以下格式回复：
-检查结果：[任务完成 / 任务未完成]
-原因：[如果未完成，说明原因]
-建议：[如果未完成，建议如何处理]"""
-```
-
----
-
-#### End 节点 - 生成报告
-
-**职责**：生成最终任务报告
-
-**输入**：
-- 任务概述
-- 执行情况
-- 检查结果
-
-**输出**：
-- 最终任务报告
-
----
-
-### 2.3 工作流条件边
-
-```python
-# Act 之后的走向
-def _should_continue_after_act(self, state) -> str:
-    if current_index >= len(plan):
-        return "examine"      # 所有步骤完成
-    if step_status == "failure":
-        return "reflect"     # 执行失败
-    if iteration_count >= max_iterations:
-        return "examine"      # 达到最大迭代
-    return "act"             # 继续执行
-
-# Reflect 之后的走向
-def _should_replan_after_reflect(self, state) -> str:
-    if reflect_type == "replan":
-        return "act"         # 重新规划
-    return "act"             # 继续执行
-
-# Examine 之后的走向
-def _should_continue_after_examine(self, state) -> str:
-    if task_completed:
-        return "end"         # 任务完成
-    if use_reflection and iteration_count < max_iterations:
-        return "reflect"     # 继续反思
-    return "end"             # 强制结束
-```
-
----
-
-## 工具系统架构
-
-### 3.1 ToolManager 架构
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                       ToolManager 单例                            │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   ┌──────────────────────────────────────────────────────────┐  │
-│   │                    配置管理                                │  │
-│   │  - AgentConfig (Agent行为配置)                            │  │
-│   │  - ROS服务地址配置                                        │  │
-│   │  - 默认参数                                               │  │
-│   └──────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│   ┌──────────────────────────────────────────────────────────┐  │
-│   │                 ROS2 服务客户端                            │  │
-│   │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐        │  │
-│   │  │  move   │ │  yolo   │ │  vlm    │ │ track   │  ...   │  │
-│   │  │ Service │ │ Service │ │ Service │ │ Service │        │  │
-│   │  └─────────┘ └─────────┘ └─────────┘ └─────────┘        │  │
-│   └──────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│   ┌──────────────────────────────────────────────────────────┐  │
-│   │                    工具方法                                │  │
-│   │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐          │  │
-│   │  │  move  │ │yolo_de │ │ vlm_de │ │ track  │  ...     │  │
-│   │  │        │ │  tect  │ │  tect  │ │        │          │  │
-│   │  └────────┘ └────────┘ └────────┘ └────────┘          │  │
-│   └──────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│   ┌──────────────────────────────────────────────────────────┐  │
-│   │                 模拟方法 (非ROS模式)                       │  │
-│   │  用于测试和无硬件环境                                      │  │
-│   └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-### 3.2 工具函数封装
-
-LangGraph 需要将 Python 函数封装为可调用的工具：
-
-```python
-from langchain_core.tools import tool
-
-@tool
-def move_wrapper(velocity: Optional[float] = None, angle: float = 0.0, 
-                seconds: Optional[float] = None) -> str:
-    """移动工具"""
-    result = tm.move(velocity, angle, seconds)
-    return json.dumps(result, ensure_ascii=False)
-
-@tool
-def yolo_detect_wrapper(threshold: Optional[float] = None) -> str:
-    """YOLO物体检测工具"""
-    result = tm.yolo_detect(threshold)
-    return json.dumps(result, ensure_ascii=False)
-
-# ... 其他工具类似
-```
-
-### 3.3 工具绑定到 LLM
-
-```python
-# 创建工具函数字典
-tool_functions = create_tool_functions(tool_manager)
-
-# 绑定到 LLM
-llm_with_tools = llm.bind_tools(
-    list(tool_functions.values()),
-    tool_choice="auto"  # 自动选择工具
-)
-```
-
----
-
-## 六个工具详解
-
-### 4.1 Move - 移动控制
-
-**接口定义**：
-```python
-def move(velocity: Optional[float] = None, 
-         angle: float = 0.0, 
-         seconds: Optional[float] = None) -> Dict[str, Any]:
-```
-
-**参数说明**：
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| velocity | float | 0.2 m/s | 移动速度，正数前进，负数后退 |
-| angle | float | 0.0° | 转向角度，0直行，正数左转，负数右转 |
-| seconds | float | 2.0 s | 移动持续时间 |
-
-**返回结果**：
-```json
-{
-    "success": true,
-    "message": "移动完成",
-    "velocity": 0.2,
-    "angle": 0.0,
-    "seconds": 2.0
-}
-```
-
-**ROS2 服务**：
-- 服务名：`/pgi_agent/move`
-- 服务类型：`MoveCommand.srv`
-
-**实现逻辑**：
-```python
-def move(self, velocity=None, angle=0.0, seconds=None):
-    # 1. 使用默认值
-    velocity = velocity or self.config.default_move_velocity
-    seconds = seconds or self.config.default_move_seconds
-    
-    # 2. 安全限制
-    velocity = max(min(velocity, self.config.max_velocity), 
-                  -self.config.max_velocity)
-    
-    # 3. 构建请求
-    request = MoveCommand.Request()
-    request.velocity = float(velocity)
-    request.angle = float(angle)
-    request.seconds = float(seconds)
-    
-    # 4. 调用服务
-    response = self._call_service(self.config.move_service, request)
-    
-    # 5. 返回结果
-    return {
-        "success": response.success,
-        "message": response.message,
-        "velocity": velocity,
-        "angle": angle,
-        "seconds": seconds
-    }
-```
-
-**模拟模式**：
-```python
-def _simulate_move(self, velocity, angle, seconds):
-    time.sleep(min(seconds, 0.5))  # 模拟延迟
-    return {
-        "success": True,
-        "message": f"模拟移动完成: 速度={velocity}m/s, 角度={angle}°, 时间={seconds}s",
-        "velocity": velocity,
-        "angle": angle,
-        "seconds": seconds
-    }
-```
-
----
-
-### 4.2 YOLO Detect - 物体检测
-
-**接口定义**：
-```python
-def yolo_detect(threshold: Optional[float] = None) -> Dict[str, Any]:
-```
-
-**参数说明**：
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| threshold | float | 0.8 | 置信度阈值 (0.0-1.0) |
-
-**返回结果**：
-```json
-{
-    "success": true,
-    "message": "检测完成",
-    "objects": [
-        {
-            "name": "person",
-            "confidence": 0.85,
-            "distance": 2.5,
-            "position": "画面中央"
-        },
-        {
-            "name": "electric_box",
-            "confidence": 0.92,
-            "distance": 3.0,
-            "position": "右上方"
-        }
-    ],
-    "threshold": 0.8,
-    "count": 2
-}
-```
-
-**ROS2 服务**：
-- 服务名：`/pgi_agent/yolo_detect`
-- 服务类型：`YOLODetect.srv`
-
-**支持的检测类别**：
-- `person` - 人员
-- `electric_box` - 电力控制箱
-- `transformer` - 变压器
-- `cable` - 电缆
-- `warning_sign` - 警告标志
-
-**实现逻辑**：
-```python
-def yolo_detect(self, threshold=None):
-    threshold = threshold or self.config.yolo_threshold
-    
-    # 调用ROS服务
-    request = YOLODetect.Request()
-    request.threshold = float(threshold)
-    response = self._call_service(self.config.yolo_service, request)
-    
-    # 解析检测结果
-    objects = []
-    if response.success:
-        for i in range(len(response.objects)):
-            obj = DetectedObject(
-                name=response.objects[i],
-                confidence=response.confidences[i],
-                distance=response.distances[i],
-                position=response.positions[i]
-            )
-            objects.append(obj.__dict__)
-    
-    return {
-        "success": response.success,
-        "message": response.message,
-        "objects": objects,
-        "threshold": threshold,
-        "count": len(objects)
-    }
-```
-
----
-
-### 4.3 VLM Detect - 视觉大模型场景理解
-
-**接口定义**：
-```python
-def vlm_detect() -> Dict[str, Any]:
-```
-
-**参数说明**：无参数
-
-**返回结果**：
-```json
-{
-    "success": true,
-    "message": "场景理解完成",
-    "description": "这是一个变电站场景。画面中央有一个电力控制箱，箱体表面有警告标志。右侧有一个变压器设备，看起来运行正常。",
-    "timestamp": 1699999999.123
-}
-```
-
-**ROS2 服务**：
-- 服务名：`/pgi_agent/vlm_detect`
-- 服务类型：`VLMDetect.srv`
-
-**实现逻辑**：
-```python
-def vlm_detect(self):
-    # 调用ROS服务
-    request = VLMDetect.Request()
-    response = self._call_service(self.config.vlm_service, request)
-    
-    return {
-        "success": response.success,
-        "message": response.message,
-        "description": response.description if response.success else "",
-        "timestamp": time.time()
-    }
-```
-
-**支持的模型**：
-- Qwen-VL-Max（阿里千问）
-- 其他兼容 OpenAI API 的 VLM
-
-**典型应用场景**：
-- 详细分析设备状态
-- 判断设备是否异常
-- 理解复杂场景
-
----
-
-### 4.4 Track - 目标追踪
-
-**接口定义**：
-```python
-def track(target: Optional[str] = None) -> Dict[str, Any]:
-```
-
-**参数说明**：
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| target | str | "person" | 追踪目标类别 |
-
-**支持的追踪目标**：
-- `person` - 人员
-- `electric_box` - 电力控制箱
-- `transformer` - 变压器
-- `vehicle` - 车辆
-
-**返回结果**：
-```json
-{
-    "success": true,
-    "message": "追踪已开始",
-    "target": "person",
-    "timestamp": 1699999999.123,
-    "tracking_status": "active",
-    "target_distance": 2.5
-}
-```
-
-**ROS2 服务**：
-- 服务名：`/pgi_agent/track`
-- 服务类型：`Track.srv`
-
-**实现逻辑**：
-```python
-def track(self, target=None):
-    target = target or "person"
-    
-    # 调用ROS服务
-    request = Track.Request()
-    request.target = target
-    response = self._call_service(self.config.track_service, request)
-    
-    return {
-        "success": response.success,
-        "message": response.message,
-        "target": target,
-        "timestamp": time.time(),
-        "tracking_status": "active",
-        "target_distance": 2.5
-    }
-```
-
-**追踪策略**：
-1. 使用 YOLO 检测目标位置
-2. 计算目标与机器人相对位置
-3. PID 控制跟随目标
-4. 保持安全距离（默认 1.2 米）
-
----
-
-### 4.5 Check Obstacle - 障碍物检测
-
-**接口定义**：
-```python
-def check_obstacle() -> Dict[str, Any]:
-```
-
-**参数说明**：无参数
-
-**返回结果**：
-```json
-{
-    "success": true,
-    "message": "前方有障碍物，建议左转15度",
-    "obstacle_info": {
-        "safe_direction": 15.0,
-        "min_distance": 1.2,
-        "safe_sectors": [true, true, true, false, false, true, true, true],
-        "sector_distances": [2.0, 1.8, 1.5, 0.3, 0.4, 1.6, 1.9, 2.1]
-    },
-    "safe_direction": 15.0,
-    "min_distance": 1.2
-}
-```
-
-**ROS2 服务**：
-- 服务名：`/pgi_agent/check_obstacle`
-- 服务类型：`CheckObstacle.srv`
-
-**扇区划分**：
-```
-          前方 (0°)
-            ↑
-    ┌───────┼───────┐
-    │  315° │  0°   │
-    │   +    │   +   │
-左  │ 225°  │  45°  │ 右
-侧  │   +    │   +   │ 侧
-    │  180°  │  270° │
-    └───────┼───────┘
-          后方 (180°)
-```
-
-**障碍物等级**：
-| 距离 | 等级 | 动作 |
-|------|------|------|
-| < 0.2m | 危险 | 立即停止 |
-| < 0.3m | 警告 | 减速 |
-| < 0.5m | 注意 | 谨慎通过 |
-| > 0.5m | 安全 | 正常通过 |
-
-**实现逻辑**：
-```python
-def check_obstacle(self):
-    # 调用ROS服务
-    request = CheckObstacle.Request()
-    response = self._call_service(self.config.obstacle_service, request)
-    
-    # 解析障碍物信息
-    obstacle_info = None
-    if response.success:
-        obstacle_info = ObstacleInfo(
-            safe_direction=response.safe_direction,
-            min_distance=response.min_distance,
-            safe_sectors=list(response.safe_sectors),
-            sector_distances=[1.0] * 8
-        )
-    
-    return {
-        "success": response.success,
-        "message": response.message,
-        "obstacle_info": obstacle_info.__dict__ if obstacle_info else None,
-        "safe_direction": response.safe_direction,
-        "min_distance": response.min_distance
-    }
-```
-
----
-
-### 4.6 OCR - 文字识别
-
-**接口定义**：
-```python
-def ocr() -> Dict[str, Any]:
-```
-
-**参数说明**：无参数
-
-**返回结果**：
-```json
-{
-    "success": true,
-    "message": "识别完成",
-    "texts": ["高压危险", "禁止入内", "变电站A区"],
-    "results": [
-        {
-            "text": "高压危险",
-            "confidence": 0.95,
-            "position": "左侧上方"
-        },
-        {
-            "text": "禁止入内",
-            "confidence": 0.88,
-            "position": "右侧中间"
-        },
-        {
-            "text": "变电站A区",
-            "confidence": 0.92,
-            "position": "下方中间"
-        }
-    ],
-    "count": 3
-}
-```
-
-**ROS2 服务**：
-- 服务名：`/pgi_agent/ocr`
-- 服务类型：`OCR.srv`
-
-**支持的语言**：
-- 中文简体 (`ch_sim`)
-- 英文 (`en`)
-
-**典型识别内容**：
-- 设备标签
-- 警告标志
-- 铭牌信息
-- 编号代码
-
-**实现逻辑**：
-```python
-def ocr(self):
-    # 调用ROS服务
-    request = OCR.Request()
-    response = self._call_service(self.config.ocr_service, request)
-    
-    # 解析OCR结果
-    ocr_results = []
-    if response.success and len(response.texts) > 0:
-        for i in range(len(response.texts)):
-            result = OCRResult(
-                text=response.texts[i],
-                confidence=response.confidences[i]
-            )
-            ocr_results.append(result.__dict__)
-    
-    return {
-        "success": response.success,
-        "message": response.message,
-        "texts": [r["text"] for r in ocr_results],
-        "results": ocr_results,
-        "count": len(ocr_results)
-    }
-```
-
----
-
-## 状态管理
-
-### 5.1 PlanActReflectState
-
+### 2. State Management
 ```python
 class PlanActReflectState(TypedDict):
-    # 任务信息
-    task: str                      # 用户任务
-    iteration_count: int           # 当前迭代次数
+    """Plan-Act-Reflect Agent 状态定义"""
+    # 任务相关
+    task: str  # 用户任务描述
     
     # 执行计划
-    plan: List[str]               # 计划步骤列表
-    current_step_index: int        # 当前步骤索引
-    current_step_status: str       # 当前步骤状态
+    plan: List[str]  # 执行计划步骤列表
+    current_step_index: int  # 当前执行的步骤索引
+    
+    # 历史记录
+    past_steps: List[Dict[str, Any]]  # 已完成步骤记录
+    
+    # ReAct执行相关
+    step_messages: Annotated[List[AnyMessage], add_messages]  # ReAct节点的对话历史
+    current_step_status: Literal["success", "failure", "pending", "completed"]
+    
+    # 反思相关
+    reflection: Optional[str]  # 反思结果
+    reflect_type: Optional[Literal["modify_current", "replan"]]
+    
+    # 任务完成相关
+    task_completed: bool  # 任务是否完成
+    final_answer: Optional[str]  # 最终答案
+    examine_result: Optional[str]  # 检查结果
+    
+    # 对话历史 (用于think, plan, reflect, examine节点)
+    messages: Annotated[List[AnyMessage], add_messages]
+    
+    # 迭代控制
+    iteration_count: int  # 总迭代次数
+    max_iterations: int  # 最大迭代次数
+
+class ReactAgentState(TypedDict):
+    """ReAct Agent 状态"""
+    # 任务信息
+    task: str                          # 原始任务
+    current_step: str                  # 当前要执行的步骤
+    step_index: int                    # 步骤索引
+    total_steps: int                   # 总步骤数
     
     # 执行历史
-    messages: List[AnyMessage]     # 对话消息
-    step_messages: List[AnyMessage]# 当前步骤的ReAct消息
-    past_steps: List[Dict]          # 已完成步骤
+    messages: List[AnyMessage]          # 对话消息（包含HumanMessage/AIMessage/ToolMessage）
+    past_steps: List[Dict]              # 已完成的步骤
     
-    # 反思和检查
-    reflection: str                # 反思内容
-    reflect_type: str              # 反思类型
-    examine_result: str            # 检查结果
-    task_completed: bool           # 任务是否完成
+    # 执行控制
+    max_rounds: int                    # 最大循环轮数
+    current_round: int                 # 当前轮数
+    iteration_count: int                # 迭代次数
     
-    # 最终结果
-    final_answer: str              # 最终答案
+    # 结果
+    step_status: str                   # 步骤执行状态
 ```
 
-### 5.2 AgentConfig
+## Tools
 
+### 1. Motion Control
 ```python
-class AgentConfig:
-    # 模型配置
-    llm_provider: str = "deepseek"
-    llm_model: str = "deepseek-chat"
-    llm_temperature: float = 0.7
-    llm_max_tokens: int = 2000
-    
-    # 执行配置
-    max_iterations: int = 20
-    use_reflection: bool = True
-    
-    # 安全配置
-    max_velocity: float = 0.5
-    min_obstacle_distance: float = 0.3
-    
-    # ROS配置
-    ros_enabled: bool = True
-    
-    # 工具默认参数
-    default_move_velocity: float = 0.2
-    default_move_seconds: float = 2.0
-    yolo_threshold: float = 0.8
-    tracking_distance: float = 1.2
+move(velocity=0.2, angle=0.0, seconds=2.0)
 ```
+- `velocity`: Movement speed (m/s), positive for forward, negative for backward
+- `angle`: Steering angle (degrees), 0 for straight, positive for left turn, negative for right turn
+- `seconds`: Movement duration (seconds)
 
----
-
-## 配置管理
-
-### 6.1 配置文件结构
-
-**agent_config.yaml** - Agent 行为配置：
-```yaml
-agent:
-  name: "PowerGridInspectionAgent"
-  llm_provider: "deepseek"
-  llm_model: "deepseek-chat"
-  max_iterations: 20
-  use_reflection: true
-  ros_enabled: true
-```
-
-**ros_params.yaml** - ROS 工具节点配置：
-```yaml
-perception_node:
-  ros__parameters:
-    model_path: "yolo11n.engine"
-    rgb_topic: "/depth_cam/rgb/image_raw"
-    use_gpu: true
-
-move_node:
-  ros__parameters:
-    default_velocity: 0.2
-    max_velocity: 0.5
-    cmd_vel_topic: "/controller/cmd_vel"
-```
-
----
-
-## 使用示例
-
-### 7.1 基本使用
-
+### 2. YOLO Object Detection
 ```python
-from PGIAgent.agent import create_plan_act_reflect_agent
-
-# 创建 Agent
-agent = create_plan_act_reflect_agent()
-
-# 执行任务
-result = agent.run("检查变电站A区的设备状态", max_iterations=10)
-
-print(f"成功: {result['success']}")
-print(f"结果: {result['final_answer']}")
+yolo_detect(threshold=0.8)
 ```
+- `threshold`: Confidence threshold (0.0-1.0)
+- Returns: Object list, distances, position descriptions
 
-### 7.2 流式输出
-
+### 3. Vision Language Model Scene Understanding
 ```python
-# 同步流式输出
-for event in agent.stream("追踪一名维护人员"):
-    print(f"[{event['node']}] {event['content']}")
-
-# 异步流式输出
-async for event in agent.stream_async("检查设备状态"):
-    print(f"[{event['node']}] {event['content']}")
+VLM_detect()
 ```
+- Returns: Detailed scene description
 
-### 7.3 ROS2 集成
-
+### 4. Target Tracking
 ```python
-import rclpy
-from PGIAgent.agent import create_plan_act_reflect_agent
-
-class AgentNode(Node):
-    def __init__(self):
-        super().__init__('pgi_agent_node')
-        self.agent = create_plan_act_reflect_agent(ros_node=self)
-        
-        # 创建服务
-        self.create_service(
-            Trigger, 
-            '/pgi_agent/execute_task',
-            self.execute_task_callback
-        )
-    
-    def execute_task_callback(self, request, response):
-        result = self.agent.run(request.task)
-        response.success = result['success']
-        response.message = result['final_answer']
-        return response
+track(target="person")
 ```
+- `target`: Tracking target ("person", "electric_box", "transformer")
+- Returns: Tracking result
 
----
-
-## 同步与异步版本
-
-### 8.1 双版本设计
-
-PGIAgent 同时支持同步和异步执行，主要区别如下：
-
-| 特性 | 同步版本 | 异步版本 |
-|------|----------|----------|
-| 编译图 | `self.app` | `self.async_app` |
-| 节点函数 | `_xxx_node()` | `_xxx_node_async()` |
-| LLM调用 | `self.llm.invoke()` | `await self.async_llm.ainvoke()` |
-| 工具调用 | `tool_func(**kwargs)` | `await tool_func.ainvoke(kwargs)` |
-| 执行入口 | `agent.run()` | `agent.run_async()` |
-| 流式输出 | `agent.stream()` | `agent.stream_async()` |
-
-### 8.2 工作流构建
-
-同步和异步工作流使用相同的图结构，但节点函数不同：
-
+### 5. Obstacle Detection
 ```python
-def _build_workflow_base(self, is_async: bool = False) -> StateGraph:
-    workflow = StateGraph(PlanActReflectState)
-    
-    if is_async:
-        # 异步节点
-        workflow.add_node("think", self._think_node_async)
-        workflow.add_node("plan", self._plan_node_async)
-        workflow.add_node("act", self._act_node_async)
-        workflow.add_node("reflect", self._reflect_node_async)
-        workflow.add_node("examine", self._examine_node_async)
-        workflow.add_node("end", self._end_node_async)
-    else:
-        # 同步节点
-        workflow.add_node("think", self._think_node)
-        workflow.add_node("plan", self._plan_node)
-        workflow.add_node("act", self._act_node)
-        workflow.add_node("reflect", self._reflect_node)
-        workflow.add_node("examine", self._examine_node)
-        workflow.add_node("end", self._end_node)
-    
-    # 条件边相同
-    workflow.add_conditional_edges("act", self._should_continue_after_act, {...})
-    workflow.add_conditional_edges("reflect", self._should_replan_after_reflect, {...})
-    workflow.add_conditional_edges("examine", self._should_continue_after_examine, {...})
-    
-    return workflow
+check_obstacle()
 ```
+- Returns: Safe direction, minimum obstacle distance, safe sectors
 
-### 8.3 异步节点示例
-
+### 6. OCR Text Recognition
 ```python
-async def _act_node_async(self, state: PlanActReflectState) -> Dict[str, Any]:
-    """Act节点（异步）：使用ReAct方式执行当前步骤"""
-    # ... 准备 prompt ...
-    
-    async_llm_with_tools = self._get_async_llm_with_tools()
-    
-    for round_num in range(max_react_rounds):
-        # 异步LLM调用
-        response = await async_llm_with_tools.ainvoke(step_messages)
-        
-        if hasattr(response, 'tool_calls') and response.tool_calls:
-            for tool_call in response.tool_calls:
-                tool_name = tool_call['name']
-                tool_input = tool_call.get('args', {})
-                
-                # 获取异步工具函数
-                tool_func = self.async_tool_functions.get(tool_name)
-                if tool_func:
-                    # 异步工具调用
-                    tool_result = await tool_func.ainvoke(tool_input)
-    
-    return {...}
+ocr()
+```
+- Returns: Recognized text list and confidence scores
+
+## Tool Nodes Implementation
+
+### Overview
+
+The system provides 6 ROS2 tool nodes, each implementing a specific capability as a callable ROS2 service. These nodes are the concrete implementation behind the tool interfaces described above. All nodes follow a similar pattern: subscribe to relevant sensor data, process it, and provide results via ROS2 service calls.
+
+### 1. Detection Node (YOLO Object Detection)
+
+![workflow](../images/objectDetec.png)
+
+**Service**: `/pgi_agent/detect`
+
+**Implementation Details**:
+- Subscribes to RGB and Depth camera topics (`/depth_cam/rgb/image_raw`)
+- Uses YOLOv11 model for object detection with TensorRT acceleration support
+- **Calculates distance using depth data** at object center point (median of 5x5 region)
+- Returns object names, distances, and position descriptions (left/center/right + top/middle/bottom)
+
+**Key Parameters**:
+- `model_path`: Path to YOLO model weights
+- `engine_path`: Path to TensorRT engine (for GPU acceleration)
+- `img_size`: Input image size (default 320)
+- `conf_threshold`: Confidence threshold (default 0.8)
+
+**Code Flow**:
+```
+1. Receive service request with threshold parameter
+2. Get latest RGB and Depth frames from subscribers
+3. Run YOLO inference on RGB frame
+4. For each detected object:
+   - Calculate center point (cx, cy)
+   - Get depth at center from depth frame
+   - Generate position description based on pixel location
+5. Return lists of objects, distances, positions
 ```
 
-### 8.4 使用场景
+### 2. Move Node (Motion Control)
 
-**同步版本适用场景：**
-- 命令行脚本
-- 简单的单次任务执行
-- 调试和开发
+**Service**: `/pgi_agent/move`
 
-**异步版本适用场景：**
-- ROS2 节点集成
-- Web 服务
-- 需要并发处理多个任务
-- 与其他异步系统集成
+**Implementation Details**:
+- Implements non-blocking motion control using ROS2 timers
+- Converts velocity + angle to linear.x + angular.z (Twist message)
+- Uses thread-safe state management with locks
+- Provides emergency stop capability
 
----
+**Key Parameters**:
+- `default_velocity`: Default speed (m/s), default 0.2
+- `default_seconds`: Default movement duration (s), default 2.0
+- `angular_scaling`: Angle to angular velocity scaling factor
+- `max_velocity`: Maximum allowed speed
+- `control_frequency`: Control loop frequency (Hz)
 
-## 附录
-
-### A. 服务定义
-
-**MoveCommand.srv**：
-```yaml
-float64 velocity
-float64 angle
-float64 seconds
----
-bool success
-string message
+**Code Flow**:
+```
+1. Receive move request (velocity, angle, seconds)
+2. If already moving, reject request (prevent conflicts)
+3. Calculate angular velocity: angular_z = angle * angular_scaling
+4. Set target end time = current_time + seconds
+5. Start control timer (es Twistpublish at control_frequency)
+6. Timer callback publishes Twist until end_time reached
+7. Publish zero Twist to stop
 ```
 
-**YOLODetect.srv**：
-```yaml
-float64 threshold
----
-bool success
-string message
-string[] objects
-float64[] confidences
-float64[] distances
-string[] positions
+### 3. Obstacle Node (LiDAR Obstacle Detection)
+
+**Service**: `/pgi_agent/check_obstacle`
+
+**Implementation Details**:
+- Subscribes to LiDAR scan topic (`/scan`)
+- Divides 360° into 8 sectors (45° each)
+- Analyzes minimum distance in each sector
+- Determines safest direction to move
+- Supports safety levels: SAFE, WARNING, DANGER, CRITICAL
+
+**Key Parameters**:
+- `safety_distance`: Safe distance threshold (default 0.5m)
+- `warning_distance`: Warning distance (default 0.4m)
+- `danger_distance`: Danger distance (default 0.3m)
+- `angle_resolution`: Sector angle resolution (default 45°)
+
+**Code Flow**:
+```
+1. Receive obstacle check request
+2. Get latest LiDAR scan data (with timeout)
+3. Convert scan ranges to numpy array with angles
+4. For each sector:
+   - Filter points within sector angle range
+   - Calculate minimum valid distance
+   - Determine if sector is safe (min_distance > safety_distance)
+5. Find safest direction:
+   - Prefer forward sectors if safe
+   - Otherwise find sector with maximum distance
+6. Return safe_direction (relative angle), min_distance, sector info
 ```
 
-**VLMDetect.srv**：
-```yaml
----
-bool success
-string message
-string description
-string[] objects_detected
-string scene_type
+### 4. OCR Node (Text Recognition)
+
+**Service**: `/pgi_agent/ocr`
+
+**Implementation Details**:
+- Supports two OCR engines: EasyOCR and Tesseract
+- Image preprocessing: grayscale conversion, adaptive thresholding, denoising
+- Optional ROI (Region of Interest) extraction
+- Filters results based on power equipment keywords
+- Returns recognized text, confidence scores, and positions
+
+**Key Parameters**:
+- `ocr_engine`: OCR engine selection ("easyocr" or "tesseract")
+- `languages`: OCR languages (default ['en', 'ch_sim'])
+- `confidence_threshold`: Minimum confidence (default 0.5)
+- `preprocess_enabled`: Enable image preprocessing
+- `roi_enabled`: Enable ROI extraction
+
+**Code Flow**:
+```
+1. Receive OCR request
+2. Get latest RGB frame from subscriber
+3. Preprocess image (if enabled):
+   - Convert to grayscale
+   - Apply adaptive threshold
+   - Apply median blur denoising
+4. Extract ROI (if enabled)
+5. Run OCR engine:
+   - EasyOCR: Returns list of (bbox, text, confidence)
+   - Tesseract: Returns structured data with bboxes
+6. Filter results:
+   - Remove low confidence (< threshold)
+   - Remove texts not related to power equipment
+7. Return texts, confidences, positions
 ```
 
-**Track.srv**：
-```yaml
-string target
----
-bool success
-string message
+### 5. Track Node (Target Tracking)
+
+**Service**: `/pgi_agent/track`
+
+**Implementation Details**:
+- Uses **YOLO for target detection** with tracking
+- Implements **PID control** for autonomous tracking
+- Maintains safe distance to target
+- Supports multiple target types: person, electric_box, transformer, car, dog
+- State machine: IDLE → SEARCHING → TRACKING → LOST → COMPLETED
+
+**Key Parameters**:
+- `target_distance`: Desired tracking distance (default 1.2m)
+- `distance_tolerance`: Distance tolerance (default 0.2m)
+- `max_tracking_time`: Maximum tracking duration (default 60s)
+- `kp_distance`, `kd_distance`: PID parameters for distance
+- `kp_angle`, `kd_angle`: PID parameters for angle
+
+**Code Flow**:
+```
+1. Receive track request with target type
+2. Start tracking thread, change state to SEARCHING
+3. SEARCHING state:
+   - Detect target using YOLO
+   - If found, switch to TRACKING
+   - If not found, slowly rotate to search
+4. TRACKING state:
+   - Detect target, get distance and angle
+   - If target lost for >5 frames, switch to LOST
+   - If reached target distance, switch to COMPLETED
+   - Publish PID control commands:
+     * linear_vel = kp*error_distance + kd*deriv_distance
+     * angular_vel = kp*error_angle + kd*deriv_angle
+5. LOST state:
+   - Stop robot
+   - Wait 1s, then return to SEARCHING
+6. COMPLETED/IDLE: Stop tracking thread
 ```
 
-**CheckObstacle.srv**：
-```yaml
----
-bool success
-string message
-float64 safe_direction
-float64 min_distance
-bool[] sector_ranges
-bool[] has_obstacle
+### 6. VLM Node (Vision Language Model)
+
+**Service**: `/pgi_agent/vlm_detect`
+
+**Implementation Details**:
+- Supports multiple VLM providers: Qwen, DeepSeek, OpenAI, Local models
+- Image preprocessing: resize to max size, JPEG compression
+- Encodes images as base64 for API calls
+- Returns **scene description** for scenarios where YOLO can not handle, detected objects, scene type
+
+**Key Parameters**:
+- `provider`: VLM provider selection
+- `model`: Model name (e.g., "qwen-vl-max")
+- `api_key`: API authentication key
+- `max_tokens`: Maximum response tokens
+- `image_quality`: Image quality level ("high" or "low")
+- `timeout`: API call timeout (seconds)
+
+**Code Flow**:
+```
+1. Receive VLM detection request
+2. Get latest RGB frame from subscriber
+3. Preprocess image:
+   - Resize if larger than max_image_size
+   - Further compress if quality="low"
+4. Encode image to JPEG, then base64
+5. Build prompt for scene analysis
+6. Call VLM API with image and prompt
+7. Parse response:
+   - Extract scene type
+   - Identify objects mentioned
+   - Generate detailed analysis
+8. Return description, objects, scene_type
 ```
 
-**OCR.srv**：
-```yaml
----
-bool success
-string message
-string[] texts
-float64[] confidences
-string[] positions
+## Launch System
+
+### Why Launch Files?
+
+ROS2 launch files serve several critical purposes:
+
+1. **Process Management**: Launch files allow you to start multiple nodes with a single command, rather than manually starting each process
+2. **Parameter Management**: Centralized configuration of node parameters across the system
+3. **Dependency Handling**: Ensure nodes start in the correct order based on dependencies
+4. **Remapping**: Map generic topic names to specific hardware topics
+5. **Environment Setup**: Configure environment variables like ROS_DOMAIN_ID
+
+### Startup Sequence
+
+The project provides three launch files for different use cases:
+
+#### 1. `agent.launch.py` - Full System Launch
+Starts all 6 tool nodes plus the agent node:
+```
+1. move_node (movement control)
+2. detection_node (YOLO detection)  
+3. vlm_node (vision language model)
+4. track_node (target tracking)
+5. obstacle_node (LiDAR obstacle detection)
+6. ocr_node (text recognition)
+7. agent_node (intelligent agent)
+8. task_manager_node (task management)
 ```
 
-### B. 错误处理
-
-所有工具方法都包含完善的错误处理：
-- 服务超时：返回 `{"success": False, "message": "服务调用超时"}`
-- 服务不可用：返回 `{"success": False, "message": "服务不可用"}`
-- 异常捕获：返回 `{"success": False, "message": "具体错误信息"}`
-
-### C. 模拟模式
-
-在没有 ROS 硬件或需要离线测试时，可以启用模拟模式：
-
-```python
-# 配置中设置 ros_enabled = False
-config = AgentConfig(ros_enabled=False)
-agent = create_plan_act_reflect_agent(config)
-
-# 此时所有工具调用会返回模拟数据
-result = agent.run("检查设备")
+#### 2. `tools.launch.py` - Tool Nodes Only
+Starts only the 6 tool nodes for testing/debugging:
+```
+1. move_node
+2. detection_node
+3. vlm_node
+4. track_node
+5. obstacle_node
+6. ocr_node
+7. service_tester_node (optional)
 ```
 
----
+#### 3. `agent_only.launch.py` - Agent Only
+Starts only the agent (assuming tools are already running):
+```
+1. agent_node
+2. task_manager_node
+3. web_interface_node (optional)
+```
 
-*本文档版本: 1.0*
-*最后更新: 2026*
+**Recommended Startup Order**:
+```
+# Terminal 1: Start hardware drivers (camera, LiDAR, etc.)
+# Terminal 2: Start tool nodes
+ros2 launch PGIAgent tools.launch.py use_simulation:=true
+
+# Terminal 3: Start agent (after tools are ready)
+ros2 launch PGIAgent agent_only.launch.py
+
+# Or start everything at once:
+ros2 launch PGIAgent agent.launch.py use_simulation:=true
+```
+
+### Multi-Process vs Multi-Threading
+
+Each ROS2 node runs as a **separate process** by default. This provides:
+
+- **Process Isolation**: One node crashing doesn't affect others
+- **Resource Management**: Each process has its own memory space
+- **Parallel Execution**: True parallelism across CPU cores
+
+Inside each node, **multi-threading** is used for specific purposes:
+
+| Node | Threading Model | Purpose |
+|------|-----------------|---------|
+| `move_node` | Single thread + timer | Non-blocking motion control using ROS2 timer |
+| `detection_node` | MultiThreadedExecutor | Concurrent service requests, image callbacks |
+| `vlm_node` | MultiThreadedExecutor | Concurrent service requests, image callbacks |
+| `track_node` | Separate tracking thread + callbacks | Background tracking loop, responsive to stop commands |
+| `obstacle_node` | MultiThreadedExecutor | Concurrent service requests, scan callbacks |
+| `ocr_node` | MultiThreadedExecutor (4 threads) | Concurrent OCR processing |
+| `agent_node` | Event-driven | Single-threaded LangGraph workflow |
+
+**Key Implementation Details**:
+
+1. **Tool nodes use `MultiThreadedExecutor`**:
+   ```python
+   executor = MultiThreadedExecutor()
+   executor.add_node(node)
+   executor.spin()
+   ```
+   This allows multiple service requests to be processed concurrently.
+
+2. **Image callbacks run in separate threads**: All camera subscriptions have their own callback threads, ensuring frame capture doesn't block service processing.
+
+3. **Tracking node uses a dedicated thread**: The tracking loop runs in a separate thread (`Thread(target=self._tracking_loop)`) to maintain responsive tracking while accepting stop commands.
+
+4. **Thread-safe mechanisms**: Nodes use `threading.Lock()` and `threading.Event()` for thread-safe state management.
+
+### Launch File Parameters
+
+Common parameters across launch files:
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `ros_domain_id` | ROS2 domain ID | 0 |
+| `use_simulation` | Use simulation mode | true |
+| `ros_params` | Path to ROS parameters file | config/ros_params.yaml |
+| `agent_config` | Path to agent config | config/agent_config.yaml |
+| `model_config` | Path to model config | config/model_config.yaml |
+
+Example usage:
+```bash
+# Start with simulation mode
+ros2 launch PGIAgent agent.launch.py use_simulation:=true
+
+# Start with real hardware
+ros2 launch PGIAgent agent.launch.py use_simulation:=false
+
+# Start with custom parameters
+ros2 launch PGIAgent agent.launch.py ros_domain_id:=5 max_iterations:=30
+```
+
+## In The Future
+
+**🌐 Cloud/Local Hybrid**:  
+Add a function to the thinking node in the main diagram to **determine task complexity**.  
+If the task is relatively simple, consider using a small-parameter model deployed locally (e.g., 3B, 7B, etc.) to complete the task; if the task is difficult, use a cloud-based large model.  
+
+**Challenges**:  
+1. The current tool node operation method uses **multi-processing**, which has **high resource consumption**. However, since only one tool is called at a time, we can subscribe directly to the corresponding topics when calling tools, bypassing the multi-processing of ROS2 services.  
+2. Small models may not natively support tool calling, requiring design using other agent frameworks.  
+
+**🔧 I/O Tools**:  
+Add tools for reading and writing files.
+
+**📚 Building Database And RAG**:  
+Domain-specific fine-tuning of cloud-based large models is impractical. A power inspection knowledge database can be established, and Agentic RAG technology can be used to enable large models to fill knowledge gaps.
